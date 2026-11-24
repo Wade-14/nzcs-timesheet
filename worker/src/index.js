@@ -1,4 +1,4 @@
-// NZCS Timesheet API: logins (name + 4-digit PIN), people, clock in/out + breaks, and daily jobs, stored in Cloudflare D1.
+// NZCS Timesheet API: logins (name + 4-digit PIN), people, clock in/out + breaks + jobs per shift, stored in Cloudflare D1.
 // Each person has their own login. PINs are stored only as salted PBKDF2 hashes.
 // SETUP_CODE (Cloudflare secret) lets someone set the first PIN for a person who has none yet.
 
@@ -247,11 +247,10 @@ async function applyEvent(env, person, ev) {
     return;
   }
   if (ev.type === "jobs") {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(ev.work_date ?? ""))) throw new Error("Jobs entry is missing its day.");
+    const sh = await ownShift(ev.shift_id);
     const text = String(ev.text ?? "").slice(0, MAX_JOBS);
-    await env.DB.prepare(`INSERT INTO day_jobs (person_id, work_date, jobs, jobs_at, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5)
-      ON CONFLICT (person_id, work_date) DO UPDATE SET jobs = excluded.jobs, jobs_at = excluded.jobs_at, updated_at = excluded.updated_at
-      WHERE excluded.jobs_at >= day_jobs.jobs_at`).bind(person.id, ev.work_date, text, at, t).run();
+    await env.DB.prepare("UPDATE shifts SET jobs = ?1, jobs_at = ?2, updated_at = ?3 WHERE id = ?4 AND (jobs_at IS NULL OR jobs_at <= ?2)")
+      .bind(text, at, t, sh.id).run();
     return;
   }
   throw new Error("Unknown kind of entry.");
@@ -278,7 +277,7 @@ async function shiftsFor(env, personId, fromDate) {
   const { results: breaks } = await env.DB.prepare(
     `SELECT * FROM breaks WHERE shift_id IN (${ids.map((_, i) => `?${i + 1}`).join(",")}) ORDER BY start_at`).bind(...ids).all();
   return shifts.map(s => ({
-    id: s.id, work_date: s.work_date, clock_in_at: s.clock_in_at, clock_out_at: s.clock_out_at,
+    id: s.id, work_date: s.work_date, clock_in_at: s.clock_in_at, clock_out_at: s.clock_out_at, jobs: s.jobs || "",
     in_loc: { status: s.in_loc, lat: s.in_lat, lng: s.in_lng, acc: s.in_acc },
     out_loc: s.clock_out_at ? { status: s.out_loc, lat: s.out_lat, lng: s.out_lng, acc: s.out_acc } : null,
     breaks: breaks.filter(b => b.shift_id === s.id).map(b => ({ id: b.id, start_at: b.start_at, end_at: b.end_at })),
@@ -311,10 +310,7 @@ async function route(req, env) {
   if (path === "/api/my/shifts" && m === "GET") {
     const from = url.searchParams.get("from");
     const fromDate = /^\d{4}-\d{2}-\d{2}$/.test(from || "") ? from : nzDate(Date.now() - 7 * 86400_000);
-    const { results: days } = await env.DB.prepare(`SELECT work_date, jobs, jobs_at FROM day_jobs WHERE person_id = ?1
-      AND (work_date >= ?2 OR work_date IN (SELECT work_date FROM shifts WHERE person_id = ?1 AND clock_out_at IS NULL))`)
-      .bind(me.person.id, fromDate).all();
-    return { shifts: await shiftsFor(env, me.person.id, fromDate), days, today: nzDate(Date.now()) };
+    return { shifts: await shiftsFor(env, me.person.id, fromDate), today: nzDate(Date.now()) };
   }
 
   if (path.startsWith("/api/admin/")) {

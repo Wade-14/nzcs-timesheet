@@ -49,7 +49,7 @@ This file records the brief and every decision the owner (Wade) makes, so work c
 - Serve the repo with `python3 -m http.server 8765` and drive it with Playwright (Chromium is preinstalled), phone-sized (iPhone 13 profile).
 - Step 1 was checked with 26 API tests (PIN rules, lockout, setup code, admin-only routes, deactivation, can't remove own admin) and a phone-sized browser run (login, wrong PIN, offline reopen, Sam's screen, add/edit/turn off person). No errors.
 - Step 2 was checked with 14 API tests (night shift past midnight, re-sent taps not duplicated, two shifts in a day, open break closed at clock-out, location stored / denied flagged, can't touch someone else's shift, Sam can't clock in) and a phone-sized browser run: location explanation, clock in, then **with no signal** break, end break, double-tapped Clock Out (saved once), second clock-in, close and reopen the app, log-out warning; signal back → everything synced with GPS. Also a second person on the same phone with location denied (saved, flagged). No errors.
-- Step 3 was checked with 6 API tests (save, newest edit wins even if an older one arrives later, one row per day, private to the person, bad date rejected, 2000-character limit) and a phone-sized browser run: box hidden before clock-in, Wade's wording, Clock Out blocked when empty or only spaces, then **with no signal** typed and clocked out straight away, edited again (still one queued entry), reopened the app (text kept), second shift the same day (text carried over, Clock Out allowed); signal back → server had the latest text and both shifts. No errors.
+- Step 3 was checked with 5 API tests (two shifts each with their own text, newest edit wins even if an older one arrives later, can't write on someone else's shift, 2000-character limit) and a phone-sized browser run: box hidden before clock-in, Wade's wording, Clock Out blocked when empty or only spaces, then **with no signal** typed and clocked out straight away, edited again (still one queued entry), reopened the app (text kept), clocked in again (new empty box, "For your shift from…", first answer shown in the list, Clock Out blocked until filled); signal back → server had both shifts with their own text. Steps 1–2 tests still pass. No errors.
 - The test scripts aren't in the repo. Note: a scripted Clock Out now needs the jobs box filled in first.
 
 ## Sister apps (same owner, same setup)
@@ -154,14 +154,17 @@ How step 2 works (built 24-11-2026):
 - Can list several jobs/sites. Not linked to invoicing.
 - **Wording (Wade, 25-11-2026):** the box asks **"What job did you work on today and where?"**
 
+- **One answer per shift (Wade, 25-11-2026):** "Each clocking, I want it to come up for them to fill out what they've been doing." Every clock-in gets its own box, even with several shifts in a day, and each shift needs its own answer before it can be clocked out. (Claude first built one answer per day; Wade changed it the same day, before anything was deployed.)
+
 How step 3 works (built 25-11-2026; details chosen by Claude, tell Wade if any need changing):
 
-- **One answer per day** (not per shift), on the NZ day the shift started, so a night shift's jobs go on its start day. With two shifts in a day, the second shift shows the same text (they can add to it).
-- The box appears on the Today card under the buttons once they've clocked in (and stays for the rest of that day, still editable after clocking out). Hint under it: "You can list more than one job or place. You need to fill this in before you clock out." Plain box, no dropdown, up to 2000 characters.
+- The box appears on the Today card under the buttons as soon as they clock in, empty for each new shift. Hint under it: "You can list more than one job or place. Fill this in for each shift before you clock out." Plain box, no dropdown, up to 2000 characters.
+- When there's more than one shift today (or the shift started on an earlier day), a line above the box says which shift it's for, e.g. "For your shift from 1:00pm".
+- After clocking out, the box stays showing that shift's answer (still editable) until they clock in again. Earlier shifts' answers are shown under each shift in today's list.
 - **Clock Out with the box empty (or only spaces):** nothing is saved, the box turns red, the cursor goes into it, and it says "Fill in what job you worked on today and where, then tap Clock Out."
-- Saved on the phone as they type (shortly after they stop, or when they leave the box, or when they tap Clock Out), then synced like a tap. Only the latest text for a day is kept in the queue. On the server the newest edit (by phone time) always wins, even if an older edit arrives later.
-- An old day can't be edited from the home screen once the next day starts (changes later go through admins / adjustments).
-- Database: `day_jobs` (person, NZ date, text, phone time of last edit), `worker/migrations/0003_day_jobs.sql`. `GET /api/my/shifts` also returns `days`. Phone: IndexedDB `nzcst-data` version 2 adds a `days` store.
+- Saved on the phone as they type (shortly after they stop, when they leave the box, or before any button tap), then synced like a tap. Only the latest text for a shift is kept in the queue. On the server the newest edit (by phone time) always wins, even if an older edit arrives later.
+- Shifts from earlier days can't be edited from the home screen (changes later go through admins / adjustments).
+- Database: `shifts.jobs` + `shifts.jobs_at` (`worker/migrations/0003_shift_jobs.sql`). `GET /api/my/shifts` returns `jobs` on each shift. Sync entry type `jobs` with `shift_id`.
 
 ### 3. Time adjustments
 - Workers can't change recorded times directly. They submit an adjustment request: corrected time + reason.
@@ -200,7 +203,7 @@ How step 3 works (built 25-11-2026; details chosen by Claude, tell Wade if any n
 
 - `people` ✅ and `sessions` ✅ (built in step 1, see Logins).
 - `shifts` ✅ and `breaks` ✅ (built in step 2, `worker/migrations/0002_shifts.sql`). Adjusted flag gets added in step 5.
-- `day_jobs` ✅ (built in step 3: jobs text per person per day, not on `shifts`).
+- Jobs text ✅ is on `shifts` (`jobs`, `jobs_at`; step 3).
 - `adjustment_requests`: shift, which time, original value, requested value, reason, status, reviewer, reviewed at.
 - `leave_requests` + `leave_days`: type, date range; one row per day with hours (default 8). Status, reviewer.
 - `timesheet_submissions`: person, fortnight, sent at.

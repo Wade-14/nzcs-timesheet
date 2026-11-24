@@ -113,6 +113,7 @@ input.pin-input{letter-spacing:.5em;font-variant-numeric:tabular-nums;max-width:
 .jobs-box textarea{width:100%;font:inherit;font-size:18px;color:var(--ink);background:var(--sunken);border:2px solid var(--line);border-radius:10px;padding:12px;min-height:110px;resize:vertical}
 .jobs-box textarea.invalid{border-color:var(--danger);background:var(--danger-soft)}
 .jobs-hint{font-size:14px}
+.shifts li small.job-text{color:var(--ink);white-space:pre-line;font-size:15px}
 .loc-info{background:var(--forest-soft);border-radius:var(--r);padding:14px;display:grid;gap:8px}
 .loc-info p{margin:0}
 .sync{border-radius:var(--r);padding:10px 14px;margin-bottom:14px;font-weight:600;background:var(--amber-soft);color:var(--amber);display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
@@ -190,7 +191,7 @@ input.pin-input{letter-spacing:.5em;font-variant-numeric:tabular-nums;max-width:
         <label for="jobs">What job did you work on today and where?</label>
         <span class="muted" id="jobs-day" hidden></span>
         <textarea id="jobs" maxlength="2000" rows="3" autocapitalize="sentences"></textarea>
-        <span class="muted jobs-hint" id="jobs-hint">You can list more than one job or place. You need to fill this in before you clock out.</span>
+        <span class="muted jobs-hint" id="jobs-hint">You can list more than one job or place. Fill this in for each shift before you clock out.</span>
         <p class="err" id="jobs-err"></p>
       </div>
       <div class="totals" id="totals"></div>
@@ -378,7 +379,7 @@ function showHome(){
   $("home-hello").textContent = "Kia ora, " + me.first_name;
   $("today-card").hidden = !me.clocks_in;
   $("admin-card").hidden = me.role !== "admin";
-  if (me.clocks_in){ Promise.all([loadShifts(), loadDays()]).then(renderToday); sync(); }
+  if (me.clocks_in){ loadShifts().then(renderToday); sync(); }
   else $("sync").hidden = true;
 }
 $("to-people").onclick = () => location.hash = "people";
@@ -405,14 +406,11 @@ let db = null, shifts = [], syncing = false, syncProblem = "";
 function openDB(){
   if (db) return Promise.resolve(db);
   return new Promise((res, rej) => {
-    const r = indexedDB.open("nzcst-data", 2);
-    r.onupgradeneeded = e => {
+    const r = indexedDB.open("nzcst-data", 1);
+    r.onupgradeneeded = () => {
       const d = r.result;
-      if (e.oldVersion < 1){
-        d.createObjectStore("queue", {keyPath: "seq", autoIncrement: true});
-        d.createObjectStore("shifts", {keyPath: "id"}).createIndex("person", "person_id");
-      }
-      if (e.oldVersion < 2) d.createObjectStore("days", {keyPath: "key"}).createIndex("person", "person_id");   // jobs text per person per day
+      d.createObjectStore("queue", {keyPath: "seq", autoIncrement: true});
+      d.createObjectStore("shifts", {keyPath: "id"}).createIndex("person", "person_id");   // each shift carries its own jobs text
     };
     r.onsuccess = () => { db = r.result; res(db); };
     r.onerror = () => rej(r.error);
@@ -456,17 +454,6 @@ async function replaceShifts(list){
   await tx("shifts", "readwrite", s => { mine.forEach(k => s.delete(k)); list.forEach(sh => s.put({...sh, person_id: me.id})); });
   await loadShifts();
 }
-let days = {};   // work_date -> jobs text, for the logged-in person
-const dayKey = date => me.id + "|" + date;
-async function loadDays(){
-  days = {};
-  for (const d of await tx("days", "readonly", s => s.index("person").getAll(me.id))) days[d.work_date] = d.jobs;
-}
-async function replaceDays(list){
-  const mine = await tx("days", "readonly", s => s.index("person").getAllKeys(me.id));
-  await tx("days", "readwrite", s => { mine.forEach(k => s.delete(k)); list.forEach(d => s.put({key: dayKey(d.work_date), person_id: me.id, work_date: d.work_date, jobs: d.jobs})); });
-  await loadDays();
-}
 
 // Dates and times, always in NZ time.
 const nzDate = d => new Intl.DateTimeFormat("en-CA", {timeZone: NZ, year: "numeric", month: "2-digit", day: "2-digit"}).format(new Date(d));
@@ -480,10 +467,10 @@ const uuid = () => crypto.randomUUID();
 function breakMs(sh, nowMs){ return sh.breaks.reduce((t, b) => t + ((b.end_at ? Date.parse(b.end_at) : nowMs) - Date.parse(b.start_at)), 0); }
 function workedMs(sh, nowMs){ return (sh.clock_out_at ? Date.parse(sh.clock_out_at) : nowMs) - Date.parse(sh.clock_in_at) - breakMs(sh, nowMs); }
 const openShift = () => shifts.find(s => !s.clock_out_at);
-function jobsDate(){
+// The shift the jobs box is for: the one they're clocked into, or (once clocked out) their last shift today.
+function jobsShift(){
   const open = openShift(), today = nzDate(Date.now());
-  if (open) return open.work_date;
-  return shifts.some(s => s.work_date === today) ? today : null;
+  return open || shifts.filter(s => s.work_date === today).pop() || null;
 }
 const openBreak = sh => sh && sh.breaks.find(b => !b.end_at);
 
@@ -508,13 +495,16 @@ function renderToday(){
     : `<button class="b-break" data-act="break_start">Start Break</button><button class="b-out" data-act="clock_out">Clock Out</button>`;
   $("clock-btns").hidden = !$("loc-info").hidden;
   // Jobs box: for the day of the open shift, or today once they've worked today
-  const jd = jobsDate();
-  $("jobs-box").hidden = !jd;
-  if (jd){
+  const js = jobsShift();
+  $("jobs-box").hidden = !js;
+  if (js){
     const ta = $("jobs");
-    if (ta.dataset.date !== jd || document.activeElement !== ta){ ta.value = days[jd] || ""; ta.dataset.date = jd; }
-    $("jobs-day").hidden = jd === today;
-    $("jobs-day").textContent = "For " + nzDayLabel(jd + "T12:00:00+13:00");
+    if (ta.dataset.shift !== js.id){ ta.classList.remove("invalid"); $("jobs-err").textContent = ""; }
+    if (ta.dataset.shift !== js.id || document.activeElement !== ta){ ta.value = js.jobs || ""; ta.dataset.shift = js.id; }
+    // Say which shift it's for when there's more than one today, or it started on an earlier day
+    const several = shifts.filter(s => s.work_date === today || s === open).length > 1;
+    $("jobs-day").hidden = !several && js.work_date === today;
+    $("jobs-day").textContent = `For your shift from ${nzTime(js.clock_in_at)}${js.clock_out_at ? " to " + nzTime(js.clock_out_at) : ""}${js.work_date !== today ? " on " + nzDayLabel(js.clock_in_at) : ""}`;
   }
   // Today's totals and shifts (a shift past midnight stays on the day it started)
   const todays = shifts.filter(s => s.work_date === today || s === open);
@@ -524,7 +514,7 @@ function renderToday(){
     const bl = s.breaks.map(b => `${nzTime(b.start_at)}–${b.end_at ? nzTime(b.end_at) : "now"}`);
     const noLoc = [s.in_loc, s.out_loc].some(l => l && (l.status === "denied" || l.status === "unavailable"));
     return `<li><b>${nzTime(s.clock_in_at)} – ${s.clock_out_at ? nzTime(s.clock_out_at) : "now"}</b>${s.work_date !== today ? ` <small>started ${dmy(s.work_date)}</small>` : ""}
-      ${bl.length ? `<small>Break${bl.length > 1 ? "s" : ""}: ${bl.join(", ")}</small>` : ""}${noLoc ? `<small>Location not recorded</small>` : ""}</li>`;
+      ${bl.length ? `<small>Break${bl.length > 1 ? "s" : ""}: ${bl.join(", ")}</small>` : ""}${noLoc ? `<small>Location not recorded</small>` : ""}${s.jobs && s.jobs.trim() && s !== jobsShift() ? `<small class="job-text">${esc(s.jobs)}</small>` : ""}</li>`;
   }).join("");
 }
 setInterval(renderToday, 30000);
@@ -560,6 +550,7 @@ async function tap(act){
 }
 async function doTap(act){
   $("clock-err").textContent = "";
+  await flushJobs();    // save any typing first, so this tap can't overwrite it
   await loadShifts();   // in case another tab changed things
   const at = new Date().toISOString(), open = openShift(), brk = openBreak(open);
   let ev, sh, locKey = null;
@@ -577,8 +568,7 @@ async function doTap(act){
     ev = {type: "break_end", id: brk.id, at};
   }else if (act === "clock_out"){
     if (!open) return renderToday();
-    await flushJobs();
-    if (!(days[open.work_date] || "").trim()){
+    if (!(open.jobs || "").trim()){
       $("jobs").classList.add("invalid");
       $("jobs-err").textContent = "Fill in what job you worked on today and where, then tap Clock Out.";
       $("jobs").scrollIntoView({block: "center"}); $("jobs").focus();
@@ -603,20 +593,20 @@ async function addLocation(seq, shiftId, locKey){
 // Jobs text: saved on the phone as they type (shortly after they stop), then synced like a tap.
 // Only the latest text for a day is kept in the queue.
 let jobsTimer = null;
-async function saveJobs(date, text){
-  days[date] = text;
-  await tx("days", "readwrite", s => s.put({key: dayKey(date), person_id: me.id, work_date: date, jobs: text}));
+async function saveJobs(shiftId, text){
+  await patch("shifts", shiftId, sh => { sh.jobs = text; });
+  const sh = shifts.find(x => x.id === shiftId); if (sh) sh.jobs = text;
   const at = new Date().toISOString();
-  const waiting = (await myQueue()).find(q => q.type === "jobs" && q.work_date === date);
+  const waiting = (await myQueue()).find(q => q.type === "jobs" && q.shift_id === shiftId);
   if (waiting) await patch("queue", waiting.seq, q => { q.eid = uuid(); q.text = text; q.at = at; q.made = Date.now(); });
-  else await queueAdd({person_id: me.id, eid: uuid(), made: Date.now(), type: "jobs", id: uuid(), work_date: date, text, at});
+  else await queueAdd({person_id: me.id, eid: uuid(), made: Date.now(), type: "jobs", id: uuid(), shift_id: shiftId, text, at});
   renderSync();
 }
 async function flushJobs(){
   const ta = $("jobs");
   clearTimeout(jobsTimer); jobsTimer = null;
-  const date = ta.dataset.date;
-  if (date && (days[date] || "") !== ta.value) await saveJobs(date, ta.value);
+  const id = ta.dataset.shift, sh = shifts.find(x => x.id === id);
+  if (sh && (sh.jobs || "") !== ta.value) await saveJobs(id, ta.value);
 }
 $("jobs").addEventListener("input", () => {
   $("jobs").classList.remove("invalid"); $("jobs-err").textContent = "";
@@ -654,7 +644,7 @@ async function sync(){
     }else syncProblem = "";
     if (!(await myQueue()).length && !jobsTimer){
       const data = await api("/api/my/shifts");
-      if (!(await myQueue()).length && !jobsTimer){ await replaceShifts(data.shifts); await replaceDays(data.days || []); }
+      if (!(await myQueue()).length && !jobsTimer) await replaceShifts(data.shifts);
     }
   }catch(e){
     if (e.status === 401){ syncProblem = ""; syncing = false; return logOutHere(); }
