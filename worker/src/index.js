@@ -265,23 +265,53 @@ async function syncEvents(req, env, me) {
     try { await applyEvent(env, me.person, ev); done.push(ev.eid); }
     catch (e) { errors.push({ eid: ev && ev.eid, error: e.message }); }
   }
+  if (done.length) await env.DB.prepare("UPDATE people SET last_sync_at = ?1 WHERE id = ?2").bind(now(), me.person.id).run();
   return { done, errors };
 }
 
-// Shifts (with breaks) for one person: from a date onwards, plus any still open.
-async function shiftsFor(env, personId, fromDate) {
-  const { results: shifts } = await env.DB.prepare(
-    `SELECT * FROM shifts WHERE person_id = ?1 AND (work_date >= ?2 OR clock_out_at IS NULL) ORDER BY clock_in_at`).bind(personId, fromDate).all();
+// Shift rows → what the app gets: breaks attached, locations grouped.
+async function withBreaks(env, shifts) {
   if (!shifts.length) return [];
   const ids = shifts.map(s => s.id);
-  const { results: breaks } = await env.DB.prepare(
-    `SELECT * FROM breaks WHERE shift_id IN (${ids.map((_, i) => `?${i + 1}`).join(",")}) ORDER BY start_at`).bind(...ids).all();
+  const breaks = [];
+  for (let i = 0; i < ids.length; i += 90) {   // D1 allows ~100 bound values per query
+    const chunk = ids.slice(i, i + 90);
+    const { results } = await env.DB.prepare(
+      `SELECT * FROM breaks WHERE shift_id IN (${chunk.map((_, k) => `?${k + 1}`).join(",")}) ORDER BY start_at`).bind(...chunk).all();
+    breaks.push(...results);
+  }
   return shifts.map(s => ({
-    id: s.id, work_date: s.work_date, clock_in_at: s.clock_in_at, clock_out_at: s.clock_out_at, jobs: s.jobs || "",
+    id: s.id, person_id: s.person_id, work_date: s.work_date, clock_in_at: s.clock_in_at, clock_out_at: s.clock_out_at, jobs: s.jobs || "",
     in_loc: { status: s.in_loc, lat: s.in_lat, lng: s.in_lng, acc: s.in_acc },
     out_loc: s.clock_out_at ? { status: s.out_loc, lat: s.out_lat, lng: s.out_lng, acc: s.out_acc } : null,
     breaks: breaks.filter(b => b.shift_id === s.id).map(b => ({ id: b.id, start_at: b.start_at, end_at: b.end_at })),
   }));
+}
+
+// Shifts (with breaks) for one person: from a date onwards, plus any still open.
+async function shiftsFor(env, personId, fromDate) {
+  const { results } = await env.DB.prepare(
+    `SELECT * FROM shifts WHERE person_id = ?1 AND (work_date >= ?2 OR clock_out_at IS NULL) ORDER BY clock_in_at`).bind(personId, fromDate).all();
+  return withBreaks(env, results);
+}
+
+// Admin dashboard: everyone who clocks in, their shifts on one NZ day, anything still open, and when their phone last synced.
+async function adminDay(env, date) {
+  const { results: people } = await env.DB.prepare(
+    `SELECT * FROM people WHERE (clocks_in = 1 AND active = 1) OR id IN (SELECT person_id FROM shifts WHERE work_date = ?1)
+     ORDER BY first_name COLLATE NOCASE, last_name COLLATE NOCASE`).bind(date).all();
+  const { results: rows } = await env.DB.prepare(
+    `SELECT * FROM shifts WHERE work_date = ?1 OR clock_out_at IS NULL ORDER BY clock_in_at`).bind(date).all();
+  const shifts = await withBreaks(env, rows);
+  return {
+    date, today: nzDate(Date.now()), server_time: now(),
+    people: people.map(p => ({
+      id: p.id, first_name: p.first_name, last_name: p.last_name, active: !!p.active, clocks_in: !!p.clocks_in,
+      last_sync: p.last_sync_at || null,
+      shifts: shifts.filter(s => s.person_id === p.id && s.work_date === date),
+      open: shifts.filter(s => s.person_id === p.id && !s.clock_out_at).pop() || null,
+    })),
+  };
 }
 
 async function route(req, env) {
@@ -320,6 +350,10 @@ async function route(req, env) {
       return { people: results.map(publicPerson) };
     }
     if (path === "/api/admin/people" && m === "POST") return adminAddPerson(req, env);
+    if (path === "/api/admin/day" && m === "GET") {
+      const date = url.searchParams.get("date");
+      return adminDay(env, /^\d{4}-\d{2}-\d{2}$/.test(date || "") ? date : nzDate(Date.now()));
+    }
     let r = /^\/api\/admin\/people\/([0-9a-f]{32})$/.exec(path);
     if (r && m === "PUT") return adminEditPerson(req, env, me, r[1]);
     r = /^\/api\/admin\/people\/([0-9a-f]{32})\/pin$/.exec(path);

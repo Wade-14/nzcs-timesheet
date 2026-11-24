@@ -119,6 +119,40 @@ input.pin-input{letter-spacing:.5em;font-variant-numeric:tabular-nums;max-width:
 .sync{border-radius:var(--r);padding:10px 14px;margin-bottom:14px;font-weight:600;background:var(--amber-soft);color:var(--amber);display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
 .sync.ok{background:transparent;color:var(--forest);padding:0 2px;font-weight:500;font-size:15px}
 .sync.bad{background:var(--danger-soft);color:var(--danger)}
+
+/* Admin dashboard */
+.small{font-size:14px}
+.daynav{display:grid;grid-template-columns:56px 1fr 56px;gap:8px;align-items:center;margin-bottom:14px}
+.daynav>button{min-height:56px;font-size:28px;padding:0}
+.daynav-mid{text-align:center;display:grid;justify-items:center;gap:2px}
+.daynav-mid b{font-family:var(--f-display);font-size:22px}
+.now-sum{display:flex;gap:8px;flex-wrap:wrap}
+.now-list{display:grid;gap:6px}
+.now-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 10px;align-items:center;padding:8px 10px;border-radius:10px;background:var(--sunken)}
+.now-row b{font-size:17px;overflow-wrap:anywhere}
+.now-row .since{grid-column:1 / -1;font-size:14px;color:var(--muted)}
+.st{font-size:13px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;border-radius:999px;padding:3px 10px;white-space:nowrap}
+.st-on{background:var(--forest);color:var(--forest-ink)}
+.st-break{background:var(--hivis);color:#1a0d05}
+.st-out{background:var(--forest-soft);color:var(--forest)}
+.st-none{background:var(--line);color:var(--muted)}
+.st-warn{background:var(--amber-soft);color:var(--amber)}
+.wk-list{display:grid;gap:10px}
+.wk{border:1px solid var(--line);border-radius:10px;padding:12px;display:grid;gap:8px}
+.wk-head{display:flex;justify-content:space-between;gap:10px;align-items:baseline;flex-wrap:wrap}
+.wk-head b{font-size:18px}
+.wk-tot{font-variant-numeric:tabular-nums;font-weight:700}
+.wk-tot span{font-weight:400;color:var(--muted);font-size:14px}
+.wk-shift{border-left:4px solid var(--forest);padding:2px 0 2px 10px;display:grid;gap:2px;font-variant-numeric:tabular-nums}
+.wk-shift small{color:var(--muted);font-size:14px}
+.wk-shift .job-text{color:var(--ink);white-space:pre-line;font-size:15px}
+.wk-shift .flag{color:var(--amber);font-weight:600}
+#map{height:340px;border-radius:10px;border:1px solid var(--line);z-index:0}
+.legend{display:flex;gap:16px;font-size:14px;color:var(--muted)}
+.dot{display:inline-block;width:12px;height:12px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 0 1px #888;margin-right:6px;vertical-align:-1px}
+.dot.in{background:#1d5a40}.dot.out{background:#b3261e}
+#noloc{font-size:15px}
+#noloc ul{margin:4px 0 0;padding-left:20px}
 </style>
 </head>
 <body>
@@ -200,9 +234,38 @@ input.pin-input{letter-spacing:.5em;font-variant-numeric:tabular-nums;max-width:
     </section>
     <section class="card" id="admin-card" hidden>
       <h3>Admin</h3>
+      <button class="btn-primary btn-wide" id="to-dash">Dashboard</button>
       <button class="btn-wide" id="to-people">Manage people</button>
     </section>
     <button class="btn-ghost" id="logout">Log out</button>
+  </main>
+
+  <!-- Admin: dashboard -->
+  <main id="s-dash" hidden>
+    <div class="pin-who"><button class="btn-ghost btn-small" id="dash-back">‹ Home</button><b>Dashboard</b></div>
+    <div class="daynav">
+      <button id="day-prev" aria-label="Previous day">‹</button>
+      <div class="daynav-mid"><b id="day-label"></b><button class="btn-ghost btn-small" id="day-today" hidden>Back to today</button></div>
+      <button id="day-next" aria-label="Next day">›</button>
+    </div>
+    <p class="err" id="dash-err"></p>
+    <section class="card" id="now-card">
+      <h3>Right now</h3>
+      <div class="now-sum" id="now-sum"></div>
+      <div class="now-list" id="now-list"></div>
+      <p class="muted small" style="margin:0">Shows what phones have sent. Someone with no signal shows up when their phone next gets reception.</p>
+    </section>
+    <section class="card">
+      <h3 id="hours-title">Hours</h3>
+      <div class="wk-list" id="hours"></div>
+    </section>
+    <section class="card">
+      <h3>Clock in and out locations</h3>
+      <div id="map"></div>
+      <div class="legend"><span><i class="dot in"></i>Clock In</span><span><i class="dot out"></i>Clock Out</span></div>
+      <div id="noloc"></div>
+    </section>
+    <p class="muted small" id="dash-updated"></p>
   </main>
 
   <!-- Admin: people -->
@@ -272,7 +335,7 @@ async function api(path, {method = "GET", body} = {}){
 }
 
 /* ---------- Screens ---------- */
-const SCREENS = ["s-names", "s-pin", "s-nopin", "s-setup", "s-home", "s-people", "s-person"];
+const SCREENS = ["s-names", "s-pin", "s-nopin", "s-setup", "s-home", "s-dash", "s-people", "s-person"];
 function show(id){
   for (const s of SCREENS) $(s).hidden = s !== id;
   $("who-bar").hidden = !me;
@@ -283,6 +346,7 @@ function route(){
   const h = location.hash.slice(1);
   if (!me || !store.get(K_TOKEN)) return showNames();
   if (h === "people" && me.role === "admin") return showPeople();
+  if (h === "dash" && me.role === "admin") return showDash();
   if (h.startsWith("person-") && me.role === "admin") return showPerson(h.slice(7));
   showHome();
 }
@@ -383,6 +447,7 @@ function showHome(){
   else $("sync").hidden = true;
 }
 $("to-people").onclick = () => location.hash = "people";
+$("to-dash").onclick = () => location.hash = "dash";
 $("logout").onclick = async () => {
   const waiting = me.clocks_in ? (await myQueue()).length : 0;
   const msg = waiting
@@ -670,6 +735,145 @@ async function refreshMe(){
   }catch(e){
     if (e.status === 401) logOutHere();
   }
+}
+
+/* ---------- Admin: dashboard ----------
+   One NZ day at a time (‹ › to move). "Right now" shows only on today and refreshes every 30 seconds.
+   Needs signal: it reads straight from the server. */
+let dashDate = null, dashData = null, dashTimer = null, map = null, mapLayer = null, mapFitted = null, pins = {};
+const addDays = (ymd, n) => { const d = new Date(ymd + "T12:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+const dayName = ymd => new Date(ymd + "T12:00:00Z").toLocaleDateString("en-NZ", {timeZone: "UTC", weekday: "long"}) + " " + dmy(ymd);
+const fullName = p => p.first_name + " " + p.last_name;
+const LOC_WHY = {denied: "location turned off", unavailable: "no GPS fix", none: "no location"};
+
+function showDash(){
+  show("s-dash");
+  if (!dashDate) dashDate = nzDate(Date.now());
+  loadDash();
+  clearInterval(dashTimer);
+  dashTimer = setInterval(() => { if ($("s-dash").hidden) return clearInterval(dashTimer); if (dashDate === nzDate(Date.now())) loadDash(); }, 30000);
+}
+$("dash-back").onclick = () => location.hash = "";
+$("day-prev").onclick = () => { dashDate = addDays(dashDate, -1); loadDash(); };
+$("day-next").onclick = () => { dashDate = addDays(dashDate, 1); loadDash(); };
+$("day-today").onclick = () => { dashDate = nzDate(Date.now()); loadDash(); };
+
+async function loadDash(){
+  const today = nzDate(Date.now());
+  $("day-label").textContent = (dashDate === today ? "Today · " : "") + dayName(dashDate);
+  $("day-today").hidden = dashDate === today;
+  $("day-next").disabled = dashDate >= today;
+  try{
+    const want = dashDate;
+    const data = await api("/api/admin/day?date=" + want);
+    if (want !== dashDate) return;   // they moved to another day meanwhile
+    dashData = data; $("dash-err").textContent = "";
+    renderDash();
+  }catch(e){
+    if (e.status === 401) return logOutHere();
+    $("dash-err").textContent = e.offline ? "No signal. The dashboard needs reception." : e.message;
+  }
+}
+
+function personStatus(p, nowMs){
+  const brk = openBreak(p.open);
+  if (brk) return {cls: "st-break", label: "On break", since: "since " + nzTime(brk.start_at), rank: 1};
+  if (p.open){
+    const old = p.open.work_date !== nzDate(nowMs);
+    return {cls: old ? "st-warn" : "st-on", label: "On site", since: "since " + (old ? dayName(p.open.work_date) + " " : "") + nzTime(p.open.clock_in_at) + (old ? " (forgot to clock out?)" : ""), rank: 0};
+  }
+  const last = p.shifts.filter(s => s.clock_out_at).pop();
+  if (last) return {cls: "st-out", label: "Clocked out", since: "at " + nzTime(last.clock_out_at), rank: 2};
+  return {cls: "st-none", label: "Not in today", since: "", rank: 3};
+}
+function syncedText(p){
+  if (!p.last_sync) return "Phone hasn't synced yet";
+  const t = p.last_sync;
+  return "Phone last synced " + (nzDate(t) === nzDate(Date.now()) ? nzTime(t) : dmy(nzDate(t)) + " " + nzTime(t));
+}
+
+function renderDash(){
+  const d = dashData, nowMs = Date.now(), isToday = d.date === nzDate(nowMs);
+  const workers = d.people.filter(p => p.clocks_in || p.shifts.length);
+  // Right now
+  $("now-card").hidden = !isToday;
+  if (isToday){
+    const rows = workers.filter(p => p.active).map(p => ({p, st: personStatus(p, nowMs)})).sort((a, b) => a.st.rank - b.st.rank);
+    const count = r => rows.filter(x => x.st.rank === r).length;
+    $("now-sum").innerHTML = `<span class="st st-on">${count(0)} on site</span><span class="st st-break">${count(1)} on break</span><span class="st st-out">${count(2)} clocked out</span><span class="st st-none">${count(3)} not in</span>`;
+    $("now-list").innerHTML = rows.map(({p, st}) => `<div class="now-row"><b>${esc(fullName(p))}</b><span class="st ${st.cls}">${st.label}</span>
+      <span class="since">${esc(st.since)}${st.since ? " · " : ""}${esc(syncedText(p))}</span></div>`).join("");
+  }
+  // Hours for the day
+  $("hours-title").textContent = isToday ? "Hours today" : "Hours on " + dmy(d.date);
+  const worked = workers.filter(p => p.shifts.length), idle = workers.filter(p => !p.shifts.length && p.active && !(isToday && p.open));
+  $("hours").innerHTML = worked.map(p => {
+    const w = p.shifts.reduce((t, s) => t + workedMs(s, nowMs), 0), b = p.shifts.reduce((t, s) => t + breakMs(s, nowMs), 0);
+    const hasLoc = p.shifts.some(s => [s.in_loc, s.out_loc].some(l => l && l.status === "ok"));
+    return `<div class="wk"><div class="wk-head"><b>${esc(fullName(p))}</b><span class="wk-tot">${hm(w)} <span>worked · ${hm(b)} breaks</span></span></div>
+      ${p.shifts.map(s => {
+        const bl = s.breaks.map(x => `${nzTime(x.start_at)}–${x.end_at ? nzTime(x.end_at) : "now"}`);
+        const flags = [];
+        if (s.in_loc.status !== "ok") flags.push("No location at Clock In (" + (LOC_WHY[s.in_loc.status] || "no location") + ")");
+        if (s.out_loc && s.out_loc.status !== "ok") flags.push("No location at Clock Out (" + (LOC_WHY[s.out_loc.status] || "no location") + ")");
+        return `<div class="wk-shift"><b>${nzTime(s.clock_in_at)} – ${s.clock_out_at ? nzTime(s.clock_out_at) + (nzDate(s.clock_out_at) !== s.work_date ? " (next day)" : "") : "still clocked in"}</b>
+          ${bl.length ? `<small>Break${bl.length > 1 ? "s" : ""}: ${bl.join(", ")}</small>` : `<small>No breaks</small>`}
+          ${s.jobs && s.jobs.trim() ? `<span class="job-text">${esc(s.jobs)}</span>` : `<small>${s.clock_out_at ? "No jobs entered" : "Jobs not filled in yet"}</small>`}
+          ${flags.map(f => `<small class="flag">${f}</small>`).join("")}</div>`;
+      }).join("")}
+      ${hasLoc ? `<button class="btn-small" data-map="${esc(p.id)}" style="justify-self:start">Show on map</button>` : ""}</div>`;
+  }).join("") || `<p class="muted" style="margin:0">Nobody clocked in on this day.</p>`;
+  if (idle.length && worked.length) $("hours").insertAdjacentHTML("beforeend", `<p class="muted small" style="margin:0">No shifts: ${idle.map(p => esc(fullName(p))).join(", ")}</p>`);
+  $("dash-updated").textContent = "Updated " + nzTime(nowMs) + (isToday ? ". Refreshes every 30 seconds." : "");
+  renderMap(worked);
+}
+$("hours").addEventListener("click", e => {
+  const b = e.target.closest("[data-map]"); if (!b || !map) return;
+  const mine = pins[b.dataset.map] || [];
+  if (!mine.length) return;
+  $("map").scrollIntoView({behavior: "smooth", block: "center"});
+  map.fitBounds(L.featureGroup(mine).getBounds().pad(0.3), {maxZoom: 15});
+  mine[0].openPopup();
+});
+
+// Leaflet is only loaded for admins, the first time they open the dashboard.
+let leafletLoading = null;
+function loadLeaflet(){
+  if (window.L) return Promise.resolve();
+  if (!leafletLoading) leafletLoading = new Promise((res, rej) => {
+    const css = document.createElement("link"); css.rel = "stylesheet"; css.href = "vendor/leaflet/leaflet.css"; document.head.appendChild(css);
+    const js = document.createElement("script"); js.src = "vendor/leaflet/leaflet.js"; js.onload = res; js.onerror = () => { leafletLoading = null; rej(new Error("Couldn't load the map.")); };
+    document.head.appendChild(js);
+  });
+  return leafletLoading;
+}
+async function renderMap(worked){
+  const missing = [];
+  try{ await loadLeaflet(); }catch(e){ $("noloc").textContent = e.message; return; }
+  if (!map){
+    map = L.map("map", {scrollWheelZoom: false}).setView([-46.2, 168.4], 8);   // Southland
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {maxZoom: 19, attribution: "&copy; OpenStreetMap contributors"}).addTo(map);
+    mapLayer = L.featureGroup().addTo(map);
+  }
+  mapLayer.clearLayers(); pins = {};
+  for (const p of worked) for (const s of p.shifts){
+    for (const [loc, kind, at] of [[s.in_loc, "in", s.clock_in_at], [s.out_loc, "out", s.clock_out_at]]){
+      if (!loc) continue;
+      const label = kind === "in" ? "Clock In" : "Clock Out";
+      if (loc.status !== "ok"){ missing.push(`${esc(fullName(p))}: ${label} ${nzTime(at)} (${LOC_WHY[loc.status] || "no location"})`); continue; }
+      const m = L.circleMarker([loc.lat, loc.lng], {radius: 10, color: "#fff", weight: 3, fillColor: kind === "in" ? "#1d5a40" : "#b3261e", fillOpacity: 1})
+        .bindPopup(`<b>${esc(fullName(p))}</b><br>${label} ${nzTime(at)}${loc.acc ? `<br>Accurate to about ${loc.acc} m` : ""}`);
+      mapLayer.addLayer(m); (pins[p.id] = pins[p.id] || []).push(m);
+    }
+  }
+  map.invalidateSize();
+  // Zoom to the pins when the day changes (not on every 30-second refresh, so an admin's panning isn't undone)
+  if (mapFitted !== dashData.date){
+    mapFitted = dashData.date;
+    if (mapLayer.getLayers().length) map.fitBounds(mapLayer.getBounds().pad(0.2), {maxZoom: 14});
+    else map.setView([-46.2, 168.4], 8);
+  }
+  $("noloc").innerHTML = missing.length ? `<b>No location recorded</b><ul>${missing.map(x => `<li>${x}</li>`).join("")}</ul>` : "";
 }
 
 /* ---------- Admin: people ---------- */

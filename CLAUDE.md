@@ -12,6 +12,7 @@ This file records the brief and every decision the owner (Wade) makes, so work c
 - **24-11-2026:** Wade said go on **step 1 (logins and roles)**. Built and tested locally (Worker + app). **Not deployed yet**: the Cloudflare database and Worker still need creating, and GitHub Pages needs turning on (see "Going live" below).
 - **24-11-2026:** Wade said carry on to **step 2 (clocking + offline sync)** before going live. Built and tested locally. Still not deployed.
 - **25-11-2026:** Wade said go on **step 3 (job recording)**. Built and tested locally. Still not deployed.
+- **25-11-2026:** Wade changed step 3 to one jobs answer **per shift**, then said move on to **step 4 (admin dashboard)**. Both built and tested locally. Still not deployed.
 
 ## Where things are
 
@@ -26,6 +27,7 @@ This file records the brief and every decision the owner (Wade) makes, so work c
 
 - `index.html`: the whole app (one file, no build step). Screens: **Who are you?** (name buttons), **PIN pad**, **No PIN yet**, **First-time setup**, **Home** (Today card for people who clock in, Admin card for admins), **Manage people** list, **Add / edit person**. `API` is at the top of the script (localhost uses `http://localhost:8787`).
 - `sw.js`: service worker, same approach as the forms apps (network first, `cache: "no-cache"`, offline fallback). Cache name `nzcst-vN`: **bump it on every release** in both `sw.js` and `preview/sw.js`. It only deletes its own old `nzcst-` caches, and the app asks it to re-save missing files each time it opens ("recache"), because the NZCS Forms and SFS Forms service workers currently delete every cache on wade-14.github.io when they update.
+- `vendor/leaflet/`: Leaflet 1.9.4 (`leaflet.js`, `leaflet.css`, `LICENSE`; local copy, source-map line removed). Loaded only when an admin opens the dashboard.
 - `manifest.webmanifest`, `icon-*.png` (copied from NZCS Forms), `robots.txt`.
 - `preview/`: full copy of the app for testing. Same files.
 - `worker/`: Cloudflare Worker (`src/index.js`), D1 migrations (`migrations/`), `wrangler.toml`.
@@ -50,6 +52,7 @@ This file records the brief and every decision the owner (Wade) makes, so work c
 - Step 1 was checked with 26 API tests (PIN rules, lockout, setup code, admin-only routes, deactivation, can't remove own admin) and a phone-sized browser run (login, wrong PIN, offline reopen, Sam's screen, add/edit/turn off person). No errors.
 - Step 2 was checked with 14 API tests (night shift past midnight, re-sent taps not duplicated, two shifts in a day, open break closed at clock-out, location stored / denied flagged, can't touch someone else's shift, Sam can't clock in) and a phone-sized browser run: location explanation, clock in, then **with no signal** break, end break, double-tapped Clock Out (saved once), second clock-in, close and reopen the app, log-out warning; signal back → everything synced with GPS. Also a second person on the same phone with location denied (saved, flagged). No errors.
 - Step 3 was checked with 5 API tests (two shifts each with their own text, newest edit wins even if an older one arrives later, can't write on someone else's shift, 2000-character limit) and a phone-sized browser run: box hidden before clock-in, Wade's wording, Clock Out blocked when empty or only spaces, then **with no signal** typed and clocked out straight away, edited again (still one queued entry), reopened the app (text kept), clocked in again (new empty box, "For your shift from…", first answer shown in the list, Clock Out blocked until filled); signal back → server had both shifts with their own text. Steps 1–2 tests still pass. No errors.
+- Step 4 was checked with 8 API tests (workers get 403, Sam can read it, Sam isn't listed as a worker, open break, shift left open from yesterday shows as open but in yesterday's hours, last sync time, never-synced phone) and a phone-sized browser run as Sam with a sample day: summary counts, on-site first, "forgot to clock out?" flag, hours/breaks/jobs per shift, missing jobs and location-off flags, 4 map pins + "No location recorded" list, Show on map, previous day / Back to today / can't go past today; a worker going to `#dash` stays on Home. Map tiles were mocked (no internet in the test browser). No errors.
 - The test scripts aren't in the repo. Note: a scripted Clock Out now needs the jobs box filled in first.
 
 ## Sister apps (same owner, same setup)
@@ -184,6 +187,16 @@ How step 3 works (built 25-11-2026; details chosen by Claude, tell Wade if any n
 - Map (OpenStreetMap) of where each worker clocked in and out.
 - Manage workers (add, deactivate, reset PIN).
 
+How step 4 works (built 25-11-2026; details chosen by Claude, tell Wade if any need changing):
+
+- Admins (including Sam) get a **Dashboard** button on the Admin card (`#dash`). Workers can't open it (the API returns 403).
+- **One day at a time:** ‹ › arrows move between days (not past today), "Back to today" when on another day. Needs signal (reads straight from the server, `GET /api/admin/day?date=yyyy-mm-dd`). Refreshes every 30 seconds while showing today.
+- **Right now** (today only): counts (on site / on break / clocked out / not in), then a row per active person who clocks in, sorted on site → on break → clocked out → not in, with "since 7:02am" and **"Phone last synced <time>"** (or "Phone hasn't synced yet"), so admins can tell when someone's phone has been out of signal. Someone still clocked in from an earlier day shows amber "On site since <day> <time> (forgot to clock out?)". A note says it only shows what phones have sent.
+- **Hours** for the day: a card per person who worked: total worked and breaks, then each shift (times, "(next day)" if it ended after midnight, breaks, that shift's jobs text or "Jobs not filled in yet" / "No jobs entered", amber flags "No location at Clock In / Clock Out (location turned off / no GPS fix)"), and **Show on map**. Then "No shifts: …" for everyone else.
+- **Map** (Leaflet + OpenStreetMap tiles, credit shown): green pins = Clock In, red = Clock Out, tap for name, time and accuracy. Zooms to the day's pins when the day changes (not on each refresh, so panning isn't undone); Southland when there are none. Under it, "No location recorded" lists each clock in/out without a location. Location is never on the PDF.
+- Last sync time is stored on `people.last_sync_at` (set when a phone's sync saves anything; `worker/migrations/0004_last_sync.sql`).
+- **Not yet:** the "waiting for approval" list (adjustments, step 5; leave, step 6) and leave on the day view (step 6) get added to the dashboard in those steps.
+
 ### 6. Fortnightly timesheet PDF
 - One PDF per worker per fortnight: each day's clock in/out, breaks, total hours and jobs; leave by type and hours; approved adjustments marked as adjusted; fortnight totals (hours worked + hours of each leave type).
 - Workers have a **"Send my fortnight"** button that sends the PDF to the admin/payroll person (Sam).
@@ -215,8 +228,8 @@ How step 3 works (built 25-11-2026; details chosen by Claude, tell Wade if any n
 1. Logins and roles (worker and admin). ✅ built 24-11-2026, not deployed yet
 2. Clock in/out and breaks, with offline storage and sync. ✅ built 24-11-2026, not deployed yet
 3. Job recording. ✅ built 25-11-2026, not deployed yet
-4. Admin dashboard (live status and daily hours). ← next
-5. Adjustment requests and approvals.
+4. Admin dashboard (live status and daily hours). ✅ built 25-11-2026, not deployed yet (approvals list added in steps 5–6)
+5. Adjustment requests and approvals. ← next
 6. Leave requests and approvals.
 7. Fortnightly PDF and sending it.
 8. Test with a few staff, then roll out to everyone.
