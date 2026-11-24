@@ -1,5 +1,5 @@
 // Keeps the app working with no signal: serves saved copies, refreshes them when online.
-const CACHE = "nzcst-v1";
+const CACHE = "nzcst-v2";
 const FILES = ["./", "index.html", "manifest.webmanifest", "icon-192.png", "icon-512.png", "icon-192-maskable.png", "icon-512-maskable.png"];
 self.addEventListener("install", e => {
   // Cache each file on its own so one missing file can't stop the rest.

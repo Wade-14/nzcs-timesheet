@@ -1,4 +1,4 @@
-// NZCS Timesheet API: logins (name + 4-digit PIN), people, clock in/out + breaks + jobs per shift, stored in Cloudflare D1.
+// NZCS Timesheet API: logins (name + 4-digit PIN), people, clock in/out + breaks + jobs per shift, adjustment requests, stored in Cloudflare D1.
 // Each person has their own login. PINs are stored only as salted PBKDF2 hashes.
 // SETUP_CODE (Cloudflare secret) lets someone set the first PIN for a person who has none yet.
 
@@ -253,7 +253,111 @@ async function applyEvent(env, person, ev) {
       .bind(text, at, t, sh.id).run();
     return;
   }
+  if (ev.type === "adjust") {
+    const existing = await env.DB.prepare("SELECT person_id FROM adjustments WHERE id = ?1").bind(ev.id).first();
+    if (existing) { if (existing.person_id !== person.id) throw new Error("That request belongs to someone else."); return; }
+    const kind = ev.kind === "day" ? "day" : "shift";
+    const reason = String(ev.reason ?? "").trim().slice(0, MAX_JOBS);
+    if (!reason) throw new Error("The request needs a reason.");
+    let original = null, sh = null;
+    if (kind === "shift") {
+      sh = await ownShift(ev.shift_id);
+      original = await shiftSnapshot(env, sh);
+    }
+    const r = cleanRequest(ev.request, kind, sh);
+    await env.DB.prepare(`INSERT INTO adjustments (id, person_id, kind, shift_id, work_date, original, requested, reason, requested_at, created_at)
+      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`)
+      .bind(ev.id, person.id, kind, sh ? sh.id : null, nzDate(r.start), original && JSON.stringify(original), JSON.stringify(r), reason, at, t).run();
+    return;
+  }
   throw new Error("Unknown kind of entry.");
+}
+
+/* ---------- Adjustment requests (step 5) ---------- */
+
+const MAX_SHIFT_MS = 24 * 3600_000;
+async function shiftSnapshot(env, sh) {
+  const { results } = await env.DB.prepare("SELECT start_at, end_at FROM breaks WHERE shift_id = ?1 ORDER BY start_at").bind(sh.id).all();
+  return { start: sh.clock_in_at, end: sh.clock_out_at, breaks: results.map(b => ({ start: b.start_at, end: b.end_at })), jobs: sh.jobs || "" };
+}
+// What a request may ask for. null = leave as it is (only allowed when fixing an existing shift).
+function cleanRequest(r, kind, sh) {
+  if (!r || typeof r !== "object") throw new Error("The request is empty.");
+  if (!isTime(r.start)) throw new Error("The request needs a start time.");
+  const start = iso(r.start);
+  if (Date.parse(start) > Date.now() + 10 * 60000) throw new Error("The start time can't be in the future.");
+  let end = null;
+  if (r.end !== null && r.end !== undefined) {
+    if (!isTime(r.end)) throw new Error("The finish time isn't readable.");
+    end = iso(r.end);
+    if (end <= start) throw new Error("The finish time must be after the start time.");
+    if (Date.parse(end) - Date.parse(start) > MAX_SHIFT_MS) throw new Error("A shift can't be longer than 24 hours.");
+    if (Date.parse(end) > Date.now() + 10 * 60000) throw new Error("The finish time can't be in the future.");
+  } else if (kind === "day" || (sh && sh.clock_out_at)) throw new Error("The request needs a finish time.");
+  let breaks = null;
+  if (Array.isArray(r.breaks)) {
+    breaks = r.breaks.slice(0, 20).map(b => {
+      if (!b || !isTime(b.start) || !isTime(b.end)) throw new Error("A break is missing its start or end.");
+      const bs = iso(b.start), be = iso(b.end);
+      if (be <= bs) throw new Error("A break must end after it starts.");
+      if (bs < start || (end && be > end)) throw new Error("Breaks must be within the shift.");
+      return { start: bs, end: be };
+    }).sort((a, b) => a.start < b.start ? -1 : 1);
+    for (let i = 1; i < breaks.length; i++) if (breaks[i].start < breaks[i - 1].end) throw new Error("Two breaks overlap.");
+  } else if (kind === "day") breaks = [];
+  let jobs = null;
+  if (r.jobs !== null && r.jobs !== undefined) jobs = String(r.jobs).slice(0, MAX_JOBS);
+  if (kind === "day" && !(jobs || "").trim()) throw new Error("The request needs the job and where.");
+  return { start, end, breaks, jobs };
+}
+
+async function listRequests(env, where, binds) {
+  const { results } = await env.DB.prepare(
+    `SELECT a.*, p.first_name, p.last_name, r.first_name AS reviewer_first, r.last_name AS reviewer_last
+       FROM adjustments a JOIN people p ON p.id = a.person_id LEFT JOIN people r ON r.id = a.reviewed_by
+      WHERE ${where} ORDER BY a.created_at DESC LIMIT 100`).bind(...binds).all();
+  return results.map(a => ({
+    id: a.id, person_id: a.person_id, name: a.first_name + " " + a.last_name, kind: a.kind, shift_id: a.shift_id, work_date: a.work_date,
+    original: a.original ? JSON.parse(a.original) : null, requested: JSON.parse(a.requested), reason: a.reason,
+    status: a.status, requested_at: a.requested_at, created_at: a.created_at,
+    reviewed_by: a.reviewer_first ? a.reviewer_first + " " + a.reviewer_last : null, reviewed_at: a.reviewed_at, review_note: a.review_note, seen_at: a.seen_at,
+  }));
+}
+
+async function decideRequest(req, env, me, id) {
+  const b = await readBody(req);
+  const a = await env.DB.prepare("SELECT * FROM adjustments WHERE id = ?1").bind(id).first();
+  if (!a) throw new HttpError(404, "That request wasn't found.");
+  if (a.status !== "pending") throw new HttpError(409, "That request has already been " + a.status + ".");
+  const note = String(b.note ?? "").trim().slice(0, 1000) || null;
+  const t = now();
+  const decide = status => env.DB.prepare("UPDATE adjustments SET status = ?1, reviewed_by = ?2, reviewed_at = ?3, review_note = ?4 WHERE id = ?5 AND status = 'pending'")
+    .bind(status, me.person.id, t, note, a.id);
+  if (b.decision === "decline") { await decide("declined").run(); return { ok: true, status: "declined" }; }
+  if (b.decision !== "approve") throw new HttpError(400, "Choose approve or decline.");
+
+  const r = JSON.parse(a.requested);
+  const stmts = [];
+  const addBreaks = shiftId => (r.breaks || []).map(x => env.DB.prepare("INSERT INTO breaks (id, shift_id, start_at, end_at, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5)")
+    .bind(uid(), shiftId, x.start, x.end, t));
+  if (a.kind === "shift") {
+    const sh = await env.DB.prepare("SELECT * FROM shifts WHERE id = ?1").bind(a.shift_id).first();
+    if (!sh) throw new HttpError(409, "The shift for this request is missing.");
+    const end = r.end || sh.clock_out_at;
+    if (end && end <= r.start) throw new HttpError(409, "With this change the shift would finish before it starts. Decline it and ask them to send a new request.");
+    stmts.push(env.DB.prepare(`UPDATE shifts SET clock_in_at = ?1, work_date = ?2, clock_out_at = COALESCE(?3, clock_out_at),
+        jobs = COALESCE(?4, jobs), jobs_at = CASE WHEN ?4 IS NULL THEN jobs_at ELSE ?5 END, adjusted = 1, updated_at = ?5 WHERE id = ?6`)
+      .bind(r.start, nzDate(r.start), r.end, r.jobs, t, sh.id));
+    if (r.breaks) { stmts.push(env.DB.prepare("DELETE FROM breaks WHERE shift_id = ?1").bind(sh.id), ...addBreaks(sh.id)); }
+  } else {
+    stmts.push(env.DB.prepare(`INSERT INTO shifts (id, person_id, work_date, clock_in_at, clock_out_at, in_loc, out_loc, jobs, jobs_at, adjusted, created_at, updated_at)
+        VALUES (?1, ?2, ?3, ?4, ?5, 'none', 'none', ?6, ?7, 1, ?7, ?7)`).bind(a.id, a.person_id, nzDate(r.start), r.start, r.end, r.jobs || "", t),
+      ...addBreaks(a.id),
+      env.DB.prepare("UPDATE adjustments SET shift_id = ?1 WHERE id = ?1").bind(a.id));
+  }
+  stmts.push(decide("approved"));
+  await env.DB.batch(stmts);
+  return { ok: true, status: "approved" };
 }
 
 async function syncEvents(req, env, me) {
@@ -281,7 +385,7 @@ async function withBreaks(env, shifts) {
     breaks.push(...results);
   }
   return shifts.map(s => ({
-    id: s.id, person_id: s.person_id, work_date: s.work_date, clock_in_at: s.clock_in_at, clock_out_at: s.clock_out_at, jobs: s.jobs || "",
+    id: s.id, person_id: s.person_id, work_date: s.work_date, clock_in_at: s.clock_in_at, clock_out_at: s.clock_out_at, jobs: s.jobs || "", adjusted: !!s.adjusted,
     in_loc: { status: s.in_loc, lat: s.in_lat, lng: s.in_lng, acc: s.in_acc },
     out_loc: s.clock_out_at ? { status: s.out_loc, lat: s.out_lat, lng: s.out_lng, acc: s.out_acc } : null,
     breaks: breaks.filter(b => b.shift_id === s.id).map(b => ({ id: b.id, start_at: b.start_at, end_at: b.end_at })),
@@ -303,6 +407,17 @@ async function adminDay(env, date) {
   const { results: rows } = await env.DB.prepare(
     `SELECT * FROM shifts WHERE work_date = ?1 OR clock_out_at IS NULL ORDER BY clock_in_at`).bind(date).all();
   const shifts = await withBreaks(env, rows);
+  const adjustedIds = shifts.filter(s => s.adjusted).map(s => s.id).slice(0, 90);   // D1 bound-value limit
+  if (adjustedIds.length) {
+    const { results } = await env.DB.prepare(
+      `SELECT a.shift_id, a.kind, a.original, a.reason, r.first_name AS by FROM adjustments a LEFT JOIN people r ON r.id = a.reviewed_by
+        WHERE a.status = 'approved' AND a.shift_id IN (${adjustedIds.map((_, i) => `?${i + 1}`).join(",")}) ORDER BY a.reviewed_at`).bind(...adjustedIds).all();
+    for (const s of shifts) {
+      const mine = results.filter(x => x.shift_id === s.id);
+      if (mine.length) s.adjustment = { kind: mine[0].kind, original: mine[0].original ? JSON.parse(mine[0].original) : null,
+        reason: mine[mine.length - 1].reason, approved_by: mine[mine.length - 1].by, count: mine.length };
+    }
+  }
   return {
     date, today: nzDate(Date.now()), server_time: now(),
     people: people.map(p => ({
@@ -340,11 +455,26 @@ async function route(req, env) {
   if (path === "/api/my/shifts" && m === "GET") {
     const from = url.searchParams.get("from");
     const fromDate = /^\d{4}-\d{2}-\d{2}$/.test(from || "") ? from : nzDate(Date.now() - 7 * 86400_000);
-    return { shifts: await shiftsFor(env, me.person.id, fromDate), today: nzDate(Date.now()) };
+    return { shifts: await shiftsFor(env, me.person.id, fromDate), today: nzDate(Date.now()) };   // phone asks for 14 days
+  }
+
+  if (path === "/api/my/requests" && m === "GET")
+    return { requests: await listRequests(env, "a.person_id = ?1 AND a.created_at >= ?2", [me.person.id, new Date(Date.now() - 60 * 86400_000).toISOString()]) };
+  let mr = /^\/api\/my\/requests\/([0-9a-f-]{32,36})\/seen$/.exec(path);
+  if (mr && m === "POST") {
+    await env.DB.prepare("UPDATE adjustments SET seen_at = ?1 WHERE id = ?2 AND person_id = ?3 AND seen_at IS NULL").bind(now(), mr[1], me.person.id).run();
+    return { ok: true };
   }
 
   if (path.startsWith("/api/admin/")) {
     requireAdmin(me);
+    if (path === "/api/admin/requests" && m === "GET") {
+      if (url.searchParams.get("status") === "recent")
+        return { requests: (await listRequests(env, "a.status != 'pending' AND a.reviewed_at >= ?1", [new Date(Date.now() - 30 * 86400_000).toISOString()])) };
+      return { requests: (await listRequests(env, "a.status = 'pending'", [])).reverse() };   // oldest first
+    }
+    const dr = /^\/api\/admin\/requests\/([0-9a-f-]{32,36})$/.exec(path);
+    if (dr && m === "POST") return decideRequest(req, env, me, dr[1]);
     if (path === "/api/admin/people" && m === "GET") {
       const { results } = await env.DB.prepare("SELECT * FROM people ORDER BY active DESC, first_name COLLATE NOCASE, last_name COLLATE NOCASE").all();
       return { people: results.map(publicPerson) };

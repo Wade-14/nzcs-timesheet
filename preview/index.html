@@ -120,6 +120,46 @@ input.pin-input{letter-spacing:.5em;font-variant-numeric:tabular-nums;max-width:
 .sync.ok{background:transparent;color:var(--forest);padding:0 2px;font-weight:500;font-size:15px}
 .sync.bad{background:var(--danger-soft);color:var(--danger)}
 
+/* Step 5: my shifts, requests, adjust form, approvals */
+.ok-note{background:var(--forest-soft);color:var(--forest);border-radius:var(--r);padding:12px 14px;font-weight:600;margin:0 0 14px}
+#notices{display:grid;gap:10px;margin-bottom:14px}
+#notices:empty{display:none}
+.notice{border-radius:var(--r);padding:12px 14px;display:grid;gap:6px;font-weight:600}
+.notice.good{background:var(--forest-soft);color:var(--forest)}
+.notice.bad{background:var(--danger-soft);color:var(--danger)}
+.notice p{margin:0;font-weight:400;color:var(--ink)}
+.notice button{justify-self:start}
+.req-list,.day-list{display:grid;gap:10px}
+.req{border:1px solid var(--line);border-radius:10px;padding:12px;display:grid;gap:6px}
+.req-head{display:flex;justify-content:space-between;gap:8px;align-items:baseline;flex-wrap:wrap}
+.req-head b{font-size:17px}
+.req p{margin:0}
+.req .why{white-space:pre-line}
+.cmp{width:100%;border-collapse:collapse;font-size:15px;font-variant-numeric:tabular-nums}
+.cmp th{text-align:left;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:600;padding:2px 6px 2px 0}
+.cmp td{padding:3px 6px 3px 0;vertical-align:top;overflow-wrap:anywhere}
+.cmp td:first-child{color:var(--muted);white-space:nowrap}
+.cmp td.chg{font-weight:700;color:var(--forest)}
+.cmp td.pre{white-space:pre-line}
+.day-block{display:grid;gap:6px}
+.day-block>b{font-family:var(--f-display);font-size:19px}
+.my-shift{border-left:4px solid var(--forest);padding:2px 0 2px 10px;display:grid;gap:3px;font-variant-numeric:tabular-nums}
+.my-shift small{color:var(--muted);font-size:14px}
+.my-shift .job-text{color:var(--ink);white-space:pre-line;font-size:15px}
+.my-shift button{justify-self:start}
+.tag-adj{display:inline-block;font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;background:var(--amber-soft);color:var(--amber);border-radius:999px;padding:2px 8px;vertical-align:2px}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+input[type=time],input[type=date],textarea.plain{width:100%;font:inherit;font-size:18px;color:var(--ink);background:var(--sunken);border:2px solid var(--line);border-radius:10px;padding:10px 12px;min-height:54px}
+#s-adjust textarea{width:100%;font:inherit;font-size:17px;color:var(--ink);background:var(--sunken);border:2px solid var(--line);border-radius:10px;padding:12px;resize:vertical}
+.brk-list{display:grid;gap:8px}
+.brk{display:grid;grid-template-columns:1fr auto 1fr 52px;gap:8px;align-items:center}
+.brk span{color:var(--muted)}
+.brk button{min-height:54px;padding:0;font-size:20px}
+.appr-btns{display:flex;gap:10px;flex-wrap:wrap}
+.appr-btns button{flex:1 1 120px}
+.appr-note{width:100%;font:inherit;font-size:16px;color:var(--ink);background:var(--sunken);border:2px solid var(--line);border-radius:10px;padding:10px;min-height:48px}
+.badge{background:var(--hivis);color:#1a0d05;border-radius:999px;font-size:14px;font-weight:700;padding:1px 9px}
+
 /* Admin dashboard */
 .small{font-size:14px}
 .daynav{display:grid;grid-template-columns:56px 1fr 56px;gap:8px;align-items:center;margin-bottom:14px}
@@ -209,6 +249,7 @@ input.pin-input{letter-spacing:.5em;font-variant-numeric:tabular-nums;max-width:
   <main id="s-home" hidden>
     <h2 class="screen" id="home-hello"></h2>
     <div class="sync" id="sync" hidden></div>
+    <div id="notices"></div>
     <section class="card" id="today-card" hidden>
       <h3 id="today-date">Today</h3>
       <div class="status-big" id="today-status">Not clocked in</div>
@@ -231,6 +272,7 @@ input.pin-input{letter-spacing:.5em;font-variant-numeric:tabular-nums;max-width:
       <div class="totals" id="totals"></div>
       <ul class="shifts" id="shift-list"></ul>
       <p class="err" id="clock-err"></p>
+      <button class="btn-wide" id="to-mine">My shifts · fix a time · add a missed day</button>
     </section>
     <section class="card" id="admin-card" hidden>
       <h3>Admin</h3>
@@ -238,6 +280,45 @@ input.pin-input{letter-spacing:.5em;font-variant-numeric:tabular-nums;max-width:
       <button class="btn-wide" id="to-people">Manage people</button>
     </section>
     <button class="btn-ghost" id="logout">Log out</button>
+  </main>
+
+  <!-- My shifts and requests -->
+  <main id="s-mine" hidden>
+    <div class="pin-who"><button class="btn-ghost btn-small" id="mine-back">‹ Home</button><b>My shifts</b></div>
+    <p class="ok-note" id="mine-msg" hidden></p>
+    <button class="btn-primary btn-wide" id="add-missed" style="margin-bottom:14px">+ Add a missed day</button>
+    <section class="card" id="req-card" hidden>
+      <h3>My requests</h3>
+      <div class="req-list" id="my-reqs"></div>
+    </section>
+    <section class="card">
+      <h3>Last 14 days</h3>
+      <p class="muted small" style="margin:0">Got a time wrong? Tap <b>Ask to fix this shift</b>. An admin has to approve it.</p>
+      <div class="day-list" id="my-days"></div>
+    </section>
+  </main>
+
+  <!-- Fix a shift / add a missed day -->
+  <main id="s-adjust" hidden>
+    <div class="pin-who"><button class="btn-ghost btn-small" id="adj-back">‹ My shifts</button><b id="adj-title"></b></div>
+    <section class="card">
+      <p class="muted" style="margin:0" id="adj-intro"></p>
+      <div class="field" id="adj-date-f"><label for="adj-date">Date</label><input type="date" id="adj-date"></div>
+      <div class="row2">
+        <div class="field"><label for="adj-start">Start time</label><input type="time" id="adj-start"></div>
+        <div class="field" id="adj-end-f"><label for="adj-end">Finish time</label><input type="time" id="adj-end"></div>
+      </div>
+      <p class="muted small" id="adj-nextday" hidden style="margin:0">Finishes the next day (after midnight).</p>
+      <div class="field" id="adj-breaks-f"><span class="label">Breaks</span>
+        <div class="brk-list" id="adj-breaks"></div>
+        <button class="btn-small" id="adj-addbreak" style="justify-self:start">+ Add a break</button>
+      </div>
+      <div class="field" id="adj-jobs-f"><label for="adj-jobs">What job did you work on and where?</label><textarea id="adj-jobs" maxlength="2000" rows="3"></textarea></div>
+      <div class="field"><label for="adj-reason">Reason for the change</label><textarea id="adj-reason" maxlength="2000" rows="2"></textarea></div>
+      <div class="totals" id="adj-sum"></div>
+      <p class="err" id="adj-err"></p>
+      <button class="btn-primary btn-wide" id="adj-send">Send request</button>
+    </section>
   </main>
 
   <!-- Admin: dashboard -->
@@ -249,6 +330,10 @@ input.pin-input{letter-spacing:.5em;font-variant-numeric:tabular-nums;max-width:
       <button id="day-next" aria-label="Next day">›</button>
     </div>
     <p class="err" id="dash-err"></p>
+    <section class="card" id="appr-card">
+      <h3 id="appr-title">Waiting for approval</h3>
+      <div class="req-list" id="appr-list"></div>
+    </section>
     <section class="card" id="now-card">
       <h3>Right now</h3>
       <div class="now-sum" id="now-sum"></div>
@@ -335,7 +420,7 @@ async function api(path, {method = "GET", body} = {}){
 }
 
 /* ---------- Screens ---------- */
-const SCREENS = ["s-names", "s-pin", "s-nopin", "s-setup", "s-home", "s-dash", "s-people", "s-person"];
+const SCREENS = ["s-names", "s-pin", "s-nopin", "s-setup", "s-home", "s-mine", "s-adjust", "s-dash", "s-people", "s-person"];
 function show(id){
   for (const s of SCREENS) $(s).hidden = s !== id;
   $("who-bar").hidden = !me;
@@ -347,6 +432,9 @@ function route(){
   if (!me || !store.get(K_TOKEN)) return showNames();
   if (h === "people" && me.role === "admin") return showPeople();
   if (h === "dash" && me.role === "admin") return showDash();
+  if (h === "mine" && me.clocks_in) return showMine();
+  if (h === "missed" && me.clocks_in) return showAdjust(null);
+  if (h.startsWith("fix-") && me.clocks_in) return showAdjust(h.slice(4));
   if (h.startsWith("person-") && me.role === "admin") return showPerson(h.slice(7));
   showHome();
 }
@@ -443,8 +531,16 @@ function showHome(){
   $("home-hello").textContent = "Kia ora, " + me.first_name;
   $("today-card").hidden = !me.clocks_in;
   $("admin-card").hidden = me.role !== "admin";
-  if (me.clocks_in){ loadShifts().then(renderToday); sync(); }
-  else $("sync").hidden = true;
+  if (me.clocks_in){ loadShifts().then(renderToday); loadMyReqs(); renderNotices(); sync(); }
+  else { $("sync").hidden = true; $("notices").innerHTML = ""; }
+  if (me.role === "admin") refreshApprovalCount();
+}
+$("to-mine").onclick = () => location.hash = "mine";
+async function refreshApprovalCount(){
+  try{
+    const n = (await api("/api/admin/requests")).requests.length;
+    $("to-dash").innerHTML = "Dashboard" + (n ? ` <span class="badge">${n} to approve</span>` : "");
+  }catch(e){}
 }
 $("to-people").onclick = () => location.hash = "people";
 $("to-dash").onclick = () => location.hash = "dash";
@@ -708,8 +804,12 @@ async function sync(){
       syncProblem = res.errors.length ? `${res.errors.length} ${res.errors.length === 1 ? "entry" : "entries"} couldn't be saved on the server (${res.errors[0].error}). They're kept on this phone. Tell an admin if this doesn't clear.` : "";
     }else syncProblem = "";
     if (!(await myQueue()).length && !jobsTimer){
-      const data = await api("/api/my/shifts");
+      const data = await api("/api/my/shifts?from=" + nzDate(Date.now() - 14 * 86400_000));
       if (!(await myQueue()).length && !jobsTimer) await replaceShifts(data.shifts);
+      const rq = await api("/api/my/requests");
+      myReqs = rq.requests; store.set(K_REQS + me.id, JSON.stringify(myReqs));
+      renderNotices();
+      if (!$("s-mine").hidden) renderMine();
     }
   }catch(e){
     if (e.status === 401){ syncProblem = ""; syncing = false; return logOutHere(); }
@@ -735,6 +835,256 @@ async function refreshMe(){
   }catch(e){
     if (e.status === 401) logOutHere();
   }
+}
+
+/* ---------- My shifts, adjustment requests (step 5) ----------
+   Requests are saved on the phone and synced like taps (type "adjust"). The server keeps the shift as it was
+   and what was asked for; nothing changes until an admin approves. */
+const K_REQS = "nzcst.reqs.", K_SEEN = "nzcst.seenReqs";
+let myReqs = [];
+function loadMyReqs(){ try{ myReqs = JSON.parse(store.get(K_REQS + me.id) || "[]"); }catch(e){ myReqs = []; } }
+const addDaysNZ = (ymd, n) => { const d = new Date(ymd + "T12:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+const dayLabel = ymd => new Date(ymd + "T12:00:00Z").toLocaleDateString("en-NZ", {timeZone: "UTC", weekday: "short"}) + " " + dmy(ymd);
+// NZ wall-clock date + "HH:MM" -> exact moment (handles daylight saving)
+function nzISO(ymd, hhmm){
+  const [y, mo, d] = ymd.split("-").map(Number), [h, mi] = hhmm.split(":").map(Number);
+  const want = Date.UTC(y, mo - 1, d, h, mi);
+  let t = want;
+  for (let i = 0; i < 3; i++){
+    const p = Object.fromEntries(new Intl.DateTimeFormat("en-NZ", {timeZone: NZ, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23"}).formatToParts(new Date(t)).map(x => [x.type, x.value]));
+    t += want - Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute);
+  }
+  return new Date(t).toISOString();
+}
+const nzHHMM = iso => new Intl.DateTimeFormat("en-NZ", {timeZone: NZ, hour: "2-digit", minute: "2-digit", hourCycle: "h23"}).format(new Date(iso));
+const fmtBreaks = list => list && list.length ? list.map(b => `${nzTime(b.start)}–${nzTime(b.end)}`).join(", ") : "No breaks";
+const reqWorked = r => r.end ? hm(Date.parse(r.end) - Date.parse(r.start) - (r.breaks || []).reduce((t, b) => t + Date.parse(b.end) - Date.parse(b.start), 0)) : "";
+const shiftAsReq = sh => ({start: sh.clock_in_at, end: sh.clock_out_at, breaks: sh.breaks.map(b => ({start: b.start_at, end: b.end_at || sh.clock_out_at})), jobs: sh.jobs || ""});
+
+async function queuedReqs(){ return (await myQueue()).filter(q => q.type === "adjust"); }
+async function pendingShiftIds(){
+  const ids = new Set(myReqs.filter(r => r.status === "pending" && r.shift_id).map(r => r.shift_id));
+  for (const q of await queuedReqs()) if (q.shift_id) ids.add(q.shift_id);
+  return ids;
+}
+
+// Outcome messages on the home screen until the worker taps OK.
+function seenSet(){ try{ return new Set(JSON.parse(store.get(K_SEEN) || "[]")); }catch(e){ return new Set(); } }
+function renderNotices(){
+  if (!me || !me.clocks_in) return;
+  const seen = seenSet();
+  const list = myReqs.filter(r => r.status !== "pending" && !r.seen_at && !seen.has(r.id));
+  $("notices").innerHTML = list.map(r => {
+    const what = (r.kind === "day" ? "missed day on " : "fix for ") + dayLabel(r.work_date);
+    return `<div class="notice ${r.status === "approved" ? "good" : "bad"}">
+      <span>${r.status === "approved" ? "✓ Approved" : "✗ Declined"}: your ${what}</span>
+      <p>${r.reviewed_by ? "By " + esc(r.reviewed_by) + "." : ""}${r.review_note ? " Note: " + esc(r.review_note) : ""}</p>
+      <button class="btn-small" data-seen="${esc(r.id)}">OK</button></div>`;
+  }).join("");
+}
+$("notices").addEventListener("click", async e => {
+  const b = e.target.closest("[data-seen]"); if (!b) return;
+  const seen = seenSet(); seen.add(b.dataset.seen); store.set(K_SEEN, JSON.stringify([...seen].slice(-200)));
+  renderNotices();
+  try{ await api(`/api/my/requests/${b.dataset.seen}/seen`, {method: "POST", body: {}}); }catch(e){}
+});
+
+async function showMine(msg){
+  show("s-mine");
+  $("mine-msg").hidden = !msg; $("mine-msg").textContent = msg || "";
+  await loadShifts(); loadMyReqs();
+  renderMine();
+  sync();
+}
+$("mine-back").onclick = () => location.hash = "";
+$("add-missed").onclick = () => location.hash = "missed";
+async function renderMine(){
+  const queued = await queuedReqs(), pend = await pendingShiftIds();
+  const reqRows = queued.map(q => ({id: q.id, kind: q.kind, work_date: nzDate(q.request.start), requested: q.request, reason: q.reason, status: "waiting"}))
+    .concat(myReqs.filter(r => !queued.some(q => q.id === r.id)));
+  $("req-card").hidden = !reqRows.length;
+  const ST = {waiting: ["st-warn", "Waiting to sync"], pending: ["st-none", "Waiting for approval"], approved: ["st-on", "Approved"], declined: ["st-break", "Declined"]};
+  $("my-reqs").innerHTML = reqRows.map(r => `<div class="req"><div class="req-head"><b>${r.kind === "day" ? "Missed day" : "Fix a shift"} · ${dayLabel(r.work_date)}</b><span class="st ${ST[r.status][0]}">${ST[r.status][1]}</span></div>
+    <p>${nzTime(r.requested.start)}${r.requested.end ? " – " + nzTime(r.requested.end) : ""}${r.requested.breaks ? " · " + fmtBreaks(r.requested.breaks) : ""}</p>
+    <p class="muted small why">Reason: ${esc(r.reason)}</p>
+    ${r.review_note ? `<p class="small">Note from ${esc(r.reviewed_by || "admin")}: ${esc(r.review_note)}</p>` : ""}</div>`).join("");
+  // Shifts by day, newest first
+  const byDay = {};
+  for (const sh of shifts) (byDay[sh.work_date] = byDay[sh.work_date] || []).push(sh);
+  const dates = Object.keys(byDay).sort().reverse();
+  $("my-days").innerHTML = dates.map(d => {
+    const list = byDay[d], nowMs = Date.now();
+    const tot = list.reduce((t, s) => t + workedMs(s, nowMs), 0);
+    return `<div class="day-block"><b>${dayLabel(d)} · ${hm(tot)}</b>${list.map(sh => `<div class="my-shift">
+      <b>${nzTime(sh.clock_in_at)} – ${sh.clock_out_at ? nzTime(sh.clock_out_at) : "still clocked in"} ${sh.adjusted ? `<span class="tag-adj">Adjusted</span>` : ""}</b>
+      <small>${sh.breaks.length ? "Breaks: " + sh.breaks.map(b => `${nzTime(b.start_at)}–${b.end_at ? nzTime(b.end_at) : "now"}`).join(", ") : "No breaks"}</small>
+      ${sh.jobs && sh.jobs.trim() ? `<span class="job-text">${esc(sh.jobs)}</span>` : ""}
+      ${pend.has(sh.id) ? `<small><b>Fix requested, waiting for approval</b></small>` : `<button class="btn-small" data-fix="${esc(sh.id)}">Ask to fix this shift</button>`}
+    </div>`).join("")}</div>`;
+  }).join("") || `<p class="muted" style="margin:0">No shifts in the last 14 days.</p>`;
+}
+$("my-days").addEventListener("click", e => { const b = e.target.closest("[data-fix]"); if (b) location.hash = "fix-" + b.dataset.fix; });
+
+// The form. Fixing a shift starts with its current times; a missed day starts empty.
+let adjShift = null;
+function breakRow(b){
+  const row = document.createElement("div"); row.className = "brk";
+  row.innerHTML = `<input type="time" class="b-s" aria-label="Break start"><span>to</span><input type="time" class="b-e" aria-label="Break end"><button type="button" aria-label="Remove break">✕</button>`;
+  if (b){ const s = row.querySelector(".b-s"), e = row.querySelector(".b-e");
+    s.value = nzHHMM(b.start); s.dataset.orig = s.value; s.dataset.iso = b.start;
+    e.value = nzHHMM(b.end); e.dataset.orig = e.value; e.dataset.iso = b.end; }
+  row.querySelector("button").onclick = () => { row.remove(); adjSummary(); };
+  row.querySelectorAll("input").forEach(i => i.oninput = adjSummary);
+  return row;
+}
+async function showAdjust(shiftId){
+  await loadShifts();
+  adjShift = shiftId ? shifts.find(s => s.id === shiftId) : null;
+  if (shiftId && !adjShift){ location.hash = "mine"; return; }
+  if (shiftId && (await pendingShiftIds()).has(shiftId)){ location.hash = "mine"; return; }
+  show("s-adjust");
+  const open = adjShift && !adjShift.clock_out_at;
+  $("adj-title").textContent = adjShift ? "Fix a shift · " + dayLabel(adjShift.work_date) : "Add a missed day";
+  $("adj-intro").textContent = !adjShift ? "For a day you worked but didn't clock in at all. An admin has to approve it."
+    : open ? "You're still clocked in, so you can fix your start time here. Clock out on the home screen as normal."
+    : "Change what's wrong. An admin has to approve it. Your original times are kept.";
+  $("adj-date-f").hidden = !!adjShift;
+  $("adj-date").max = nzDate(Date.now()); $("adj-date").value = "";
+  ["adj-end-f", "adj-breaks-f", "adj-jobs-f"].forEach(id => $(id).hidden = open);
+  const st = $("adj-start"), en = $("adj-end");
+  st.value = adjShift ? nzHHMM(adjShift.clock_in_at) : ""; st.dataset.orig = st.value; st.dataset.iso = adjShift ? adjShift.clock_in_at : "";
+  en.value = adjShift && adjShift.clock_out_at ? nzHHMM(adjShift.clock_out_at) : ""; en.dataset.orig = en.value; en.dataset.iso = adjShift ? adjShift.clock_out_at || "" : "";
+  $("adj-breaks").innerHTML = "";
+  if (adjShift && !open) shiftAsReq(adjShift).breaks.forEach(b => $("adj-breaks").appendChild(breakRow(b)));
+  $("adj-jobs").value = adjShift ? adjShift.jobs || "" : "";
+  $("adj-reason").value = ""; $("adj-err").textContent = "";
+  adjSummary();
+}
+$("adj-back").onclick = () => location.hash = "mine";
+$("adj-addbreak").onclick = () => { $("adj-breaks").appendChild(breakRow(null)); adjSummary(); };
+["adj-date", "adj-start", "adj-end"].forEach(id => $(id).oninput = adjSummary);
+
+// Reads the form into {start, end, breaks, jobs}. Untouched times keep their exact original moment.
+function readAdjust(){
+  const date = adjShift ? adjShift.work_date : $("adj-date").value;
+  const open = adjShift && !adjShift.clock_out_at;
+  const at = (inp, notBefore) => {
+    if (!inp.value) return null;
+    if (inp.dataset.iso && inp.value === inp.dataset.orig) return inp.dataset.iso;
+    let t = nzISO(date, inp.value);
+    if (notBefore && t < notBefore) t = nzISO(addDaysNZ(date, 1), inp.value);   // after midnight
+    return t;
+  };
+  if (!date) return {error: "Pick the date."};
+  const start = at($("adj-start"));
+  if (!start) return {error: "Enter the start time."};
+  if (open) return {req: {start, end: null, breaks: null, jobs: null}, date};
+  const end = at($("adj-end"), start);
+  if (!end) return {error: "Enter the finish time."};
+  const breaks = [];
+  for (const row of $("adj-breaks").children){
+    const s = row.querySelector(".b-s"), e = row.querySelector(".b-e");
+    if (!s.value && !e.value) continue;
+    if (!s.value || !e.value) return {error: "Each break needs a start and an end time."};
+    const bs = at(s, start), be = at(e, bs);
+    breaks.push({start: bs, end: be});
+  }
+  breaks.sort((a, b) => a.start < b.start ? -1 : 1);
+  return {req: {start, end, breaks, jobs: $("adj-jobs").value}, date};
+}
+function checkAdjust(r){
+  const {start, end, breaks, jobs} = r;
+  if (Date.parse(start) > Date.now()) return "The start time can't be in the future.";
+  if (end === null) return "";
+  if (end <= start) return "The finish time must be after the start time.";
+  if (Date.parse(end) - Date.parse(start) > 24 * 3600_000) return "A shift can't be longer than 24 hours.";
+  if (Date.parse(end) > Date.now()) return "The finish time can't be in the future.";
+  for (let i = 0; i < breaks.length; i++){
+    const b = breaks[i];
+    if (b.end <= b.start) return "A break must end after it starts.";
+    if (b.start < start || b.end > end) return "Breaks must be between the start and finish times.";
+    if (i && b.start < breaks[i - 1].end) return "Two breaks overlap.";
+  }
+  if (!jobs.trim()) return "Fill in what job you worked on and where.";
+  return "";
+}
+function adjSummary(){
+  const r = readAdjust();
+  $("adj-nextday").hidden = !(r.req && r.req.end && nzDate(r.req.end) !== r.date);
+  $("adj-sum").innerHTML = r.req && r.req.end && r.req.end > r.req.start
+    ? `<div><span>Worked</span><b>${reqWorked(r.req)}</b></div><div><span>Breaks</span><b>${hm(r.req.breaks.reduce((t, b) => t + Date.parse(b.end) - Date.parse(b.start), 0))}</b></div>` : "";
+}
+$("adj-send").onclick = async () => {
+  const r = readAdjust();
+  const err = r.error || checkAdjust(r.req) || (!$("adj-reason").value.trim() ? "Write the reason for the change." : "");
+  if (err) return $("adj-err").textContent = err;
+  if (adjShift){
+    const o = shiftAsReq(adjShift), q = r.req;
+    const same = q.start === o.start && (q.end === null || q.end === o.end) && (q.breaks === null || JSON.stringify(q.breaks) === JSON.stringify(o.breaks)) && (q.jobs === null || q.jobs === o.jobs);
+    if (same) return $("adj-err").textContent = "Nothing has been changed yet.";
+  }
+  $("adj-send").disabled = true;
+  try{
+    await queueAdd({person_id: me.id, eid: uuid(), made: Date.now(), type: "adjust", id: uuid(), kind: adjShift ? "shift" : "day",
+      shift_id: adjShift ? adjShift.id : undefined, request: r.req, reason: $("adj-reason").value.trim(), at: new Date().toISOString()});
+    history.replaceState(null, "", "#mine");
+    await showMine("Request saved. It goes to the admins as soon as your phone has signal.");
+  }catch(e){ $("adj-err").textContent = "Couldn't save the request on this phone. (" + e.message + ")"; }
+  $("adj-send").disabled = false;
+};
+
+/* Admin: waiting for approval (on the dashboard) */
+async function loadApprovals(){
+  try{
+    const list = (await api("/api/admin/requests")).requests;
+    renderApprovals(list);
+    $("to-dash").innerHTML = "Dashboard" + (list.length ? ` <span class="badge">${list.length} to approve</span>` : "");
+  }catch(e){ if (e.status === 401) logOutHere(); }
+}
+function cmpRows(r){
+  const o = r.original, q = r.requested;
+  const row = (label, a, b, pre) => `<tr><td>${label}</td>${o ? `<td class="${pre ? "pre" : ""}">${a}</td>` : ""}<td class="${(!o || a !== b) ? "chg" : ""} ${pre ? "pre" : ""}">${b}</td></tr>`;
+  const t = (x, base) => x ? nzTime(x) + (nzDate(x) !== r.work_date ? " (next day)" : "") : "—";
+  const qEnd = q.end === null && o ? o.end : q.end, qBreaks = q.breaks === null && o ? o.breaks : q.breaks, qJobs = q.jobs === null && o ? o.jobs : q.jobs;
+  const oFull = o ? {...o, breaks: o.breaks.filter(b => b.end)} : null;
+  return `<table class="cmp"><tr><th></th>${o ? "<th>Now</th>" : ""}<th>${o ? "Asked for" : "Asked for"}</th></tr>
+    ${row("Start", o ? t(o.start) : "", t(q.start))}
+    ${row("Finish", o ? (o.end ? t(o.end) : "still clocked in") : "", qEnd ? t(qEnd) : "still clocked in")}
+    ${row("Breaks", o ? fmtBreaks(oFull.breaks) : "", fmtBreaks(qBreaks || []))}
+    ${qEnd ? row("Worked", o && o.end ? reqWorked(oFull) : "", reqWorked({start: q.start, end: qEnd, breaks: qBreaks || []})) : ""}
+    ${row("Job / where", o ? esc(o.jobs || "—") : "", esc(qJobs || "—"), true)}</table>`;
+}
+function renderApprovals(list){
+  $("appr-title").textContent = "Waiting for approval" + (list.length ? ` (${list.length})` : "");
+  $("appr-list").innerHTML = list.map(r => `<div class="req" data-req="${esc(r.id)}">
+      <div class="req-head"><b>${esc(r.name)}</b><span class="st ${r.kind === "day" ? "st-break" : "st-none"}">${r.kind === "day" ? "Missed day" : "Fix a shift"}</span></div>
+      <p><b>${dayLabel(r.work_date)}</b> <span class="muted small">· sent ${dayLabel(nzDate(r.requested_at))} ${nzTime(r.requested_at)}</span></p>
+      ${cmpRows(r)}
+      <p class="why"><b>Reason:</b> ${esc(r.reason)}</p>
+      <input class="appr-note" type="text" placeholder="Note to ${esc(r.name.split(" ")[0])} (optional)" maxlength="1000">
+      <div class="appr-btns"><button class="btn-primary" data-decide="approve">Approve</button><button class="btn-danger" data-decide="decline">Decline</button></div>
+      <p class="err"></p></div>`).join("") || `<p class="muted" style="margin:0">Nothing waiting for approval.</p>`;
+}
+$("appr-list").addEventListener("click", async e => {
+  const b = e.target.closest("[data-decide]"); if (!b) return;
+  const card = b.closest("[data-req]"), err = card.querySelector(".err");
+  card.querySelectorAll("button").forEach(x => x.disabled = true);
+  try{
+    await api("/api/admin/requests/" + card.dataset.req, {method: "POST", body: {decision: b.dataset.decide, note: card.querySelector(".appr-note").value}});
+    await loadDash();
+  }catch(ex){
+    err.textContent = ex.message;
+    card.querySelectorAll("button").forEach(x => x.disabled = false);
+  }
+});
+function adjText(s){
+  if (!s.adjusted) return "";
+  const a = s.adjustment;
+  if (!a) return `<small class="flag">Adjusted</small>`;
+  if (a.kind === "day") return `<small class="flag">Added from a missed-day request${a.approved_by ? " · approved by " + esc(a.approved_by) : ""}</small><small>Reason: ${esc(a.reason)}</small>`;
+  const o = a.original;
+  return `<small class="flag">Adjusted${a.approved_by ? " · approved by " + esc(a.approved_by) : ""}</small>
+    <small>Was ${nzTime(o.start)} – ${o.end ? nzTime(o.end) : "still clocked in"}, ${fmtBreaks(o.breaks.filter(b => b.end))}. Reason: ${esc(a.reason)}</small>`;
 }
 
 /* ---------- Admin: dashboard ----------
@@ -768,6 +1118,7 @@ async function loadDash(){
     const data = await api("/api/admin/day?date=" + want);
     if (want !== dashDate) return;   // they moved to another day meanwhile
     dashData = data; $("dash-err").textContent = "";
+    loadApprovals();
     renderDash();
   }catch(e){
     if (e.status === 401) return logOutHere();
@@ -814,12 +1165,12 @@ function renderDash(){
       ${p.shifts.map(s => {
         const bl = s.breaks.map(x => `${nzTime(x.start_at)}–${x.end_at ? nzTime(x.end_at) : "now"}`);
         const flags = [];
-        if (s.in_loc.status !== "ok") flags.push("No location at Clock In (" + (LOC_WHY[s.in_loc.status] || "no location") + ")");
-        if (s.out_loc && s.out_loc.status !== "ok") flags.push("No location at Clock Out (" + (LOC_WHY[s.out_loc.status] || "no location") + ")");
+        if (s.in_loc.status !== "ok" && s.in_loc.status !== "none") flags.push("No location at Clock In (" + (LOC_WHY[s.in_loc.status] || "no location") + ")");
+        if (s.out_loc && s.out_loc.status !== "ok" && s.out_loc.status !== "none") flags.push("No location at Clock Out (" + (LOC_WHY[s.out_loc.status] || "no location") + ")");
         return `<div class="wk-shift"><b>${nzTime(s.clock_in_at)} – ${s.clock_out_at ? nzTime(s.clock_out_at) + (nzDate(s.clock_out_at) !== s.work_date ? " (next day)" : "") : "still clocked in"}</b>
           ${bl.length ? `<small>Break${bl.length > 1 ? "s" : ""}: ${bl.join(", ")}</small>` : `<small>No breaks</small>`}
           ${s.jobs && s.jobs.trim() ? `<span class="job-text">${esc(s.jobs)}</span>` : `<small>${s.clock_out_at ? "No jobs entered" : "Jobs not filled in yet"}</small>`}
-          ${flags.map(f => `<small class="flag">${f}</small>`).join("")}</div>`;
+          ${flags.map(f => `<small class="flag">${f}</small>`).join("")}${adjText(s)}</div>`;
       }).join("")}
       ${hasLoc ? `<button class="btn-small" data-map="${esc(p.id)}" style="justify-self:start">Show on map</button>` : ""}</div>`;
   }).join("") || `<p class="muted" style="margin:0">Nobody clocked in on this day.</p>`;
@@ -860,6 +1211,7 @@ async function renderMap(worked){
     for (const [loc, kind, at] of [[s.in_loc, "in", s.clock_in_at], [s.out_loc, "out", s.clock_out_at]]){
       if (!loc) continue;
       const label = kind === "in" ? "Clock In" : "Clock Out";
+      if (loc.status === "none") continue;   // added from a missed-day request: there never was a location
       if (loc.status !== "ok"){ missing.push(`${esc(fullName(p))}: ${label} ${nzTime(at)} (${LOC_WHY[loc.status] || "no location"})`); continue; }
       const m = L.circleMarker([loc.lat, loc.lng], {radius: 10, color: "#fff", weight: 3, fillColor: kind === "in" ? "#1d5a40" : "#b3261e", fillOpacity: 1})
         .bindPopup(`<b>${esc(fullName(p))}</b><br>${label} ${nzTime(at)}${loc.acc ? `<br>Accurate to about ${loc.acc} m` : ""}`);

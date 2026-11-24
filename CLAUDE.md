@@ -14,6 +14,7 @@ This file records the brief and every decision the owner (Wade) makes, so work c
 - **25-11-2026:** Wade said go on **step 3 (job recording)**. Built and tested locally. Still not deployed.
 - **25-11-2026:** Wade changed step 3 to one jobs answer **per shift**, then said move on to **step 4 (admin dashboard)**. Both built and tested locally. Still not deployed.
 - **25-11-2026:** Wade asked for a live version to install on his phone. **Cloudflare done by Claude:** D1 database `nzcs-timesheet` created (Oceania, id in `wrangler.toml`), migrations 0001–0004 applied (13 people, 5 admins, no PINs), Worker deployed and answering at the API address (checked health, names, CORS for wade-14.github.io). **Waiting on Wade:** add the `SETUP_CODE` secret, turn on GitHub Pages (Claude can't: the session's GitHub proxy blocks the Pages API).
+- **25-11-2026:** Wade said proceed with **step 5 (adjustments)** and answered the open question (below). Built, tested, migration 0005 applied to the live database, Worker redeployed, app released (cache `nzcst-v2`).
 
 ## Where things are
 
@@ -54,6 +55,7 @@ This file records the brief and every decision the owner (Wade) makes, so work c
 - Step 2 was checked with 14 API tests (night shift past midnight, re-sent taps not duplicated, two shifts in a day, open break closed at clock-out, location stored / denied flagged, can't touch someone else's shift, Sam can't clock in) and a phone-sized browser run: location explanation, clock in, then **with no signal** break, end break, double-tapped Clock Out (saved once), second clock-in, close and reopen the app, log-out warning; signal back → everything synced with GPS. Also a second person on the same phone with location denied (saved, flagged). No errors.
 - Step 3 was checked with 5 API tests (two shifts each with their own text, newest edit wins even if an older one arrives later, can't write on someone else's shift, 2000-character limit) and a phone-sized browser run: box hidden before clock-in, Wade's wording, Clock Out blocked when empty or only spaces, then **with no signal** typed and clocked out straight away, edited again (still one queued entry), reopened the app (text kept), clocked in again (new empty box, "For your shift from…", first answer shown in the list, Clock Out blocked until filled); signal back → server had both shifts with their own text. Steps 1–2 tests still pass. No errors.
 - Step 4 was checked with 8 API tests (workers get 403, Sam can read it, Sam isn't listed as a worker, open break, shift left open from yesterday shows as open but in yesterday's hours, last sync time, never-synced phone) and a phone-sized browser run as Sam with a sample day: summary counts, on-site first, "forgot to clock out?" flag, hours/breaks/jobs per shift, missing jobs and location-off flags, 4 map pins + "No location recorded" list, Show on map, previous day / Back to today / can't go past today; a worker going to `#dash` stays on Home. Map tiles were mocked (no internet in the test browser). No errors.
+- Step 5 was checked with 25 API tests (save, re-send harmless, finish before start / break outside / overlapping / missing finish / no reason / someone else's shift rejected, missed day needs job, open shift start-only, workers can't list, oldest first, original kept, approve updates shift, can't decide twice, missed day becomes a shift on the right date, decline changes nothing, worker sees outcome + note + who, seen, dashboard shows original) and a two-phone browser run: Ruby fixes yesterday's finish + adds a break (form checks, live totals), then adds a missed day **with no signal** (Waiting to sync → synced); Sam sees "2 to approve", Now vs Asked for, approves one with a note and declines the other; dashboard shows Adjusted / was / approved by; Ruby gets both outcome boxes, OK clears them (stays cleared), her shift shows Adjusted with the new times. No errors.
 - The test scripts aren't in the repo. Note: a scripted Clock Out now needs the jobs box filled in first.
 
 ## Sister apps (same owner, same setup)
@@ -174,6 +176,19 @@ How step 3 works (built 25-11-2026; details chosen by Claude, tell Wade if any n
 - Workers can't change recorded times directly. They submit an adjustment request: corrected time + reason.
 - An admin approves or declines; the worker is notified.
 - Original and adjusted times are both kept (audit trail).
+- **Forgot to clock in (Wade, 25-11-2026):** they clock in later in the day, then send an adjustment for the start time.
+- **Missed a whole day (Wade, 25-11-2026):** a "missed day" request with start, finish, breaks, where they were working (the job box) and a reason.
+
+How step 5 works (built 25-11-2026; details chosen by Claude, tell Wade if any need changing):
+
+- Home (people who clock in): button under the Today card **"My shifts · fix a time · add a missed day"** → `#mine`: **+ Add a missed day**, **My requests** (Waiting to sync / Waiting for approval / Approved / Declined, with reason and any admin note), and the **last 14 days** of shifts by day (totals, breaks, jobs, "Adjusted" tag), each with **Ask to fix this shift** (replaced by "Fix requested, waiting for approval" while one is pending: one pending request per shift).
+- **Fix a shift** (`#fix-<id>`): starts with the shift's current start, finish, breaks (add / ✕ remove) and job text, plus a required **Reason for the change**. Live Worked / Breaks totals. A finish (or break) time earlier than the start counts as the next day. Checks: finish after start, max 24 h, nothing in the future, breaks inside the shift and not overlapping, job filled in, something actually changed. **Still clocked in:** only the start time can be fixed (clock out as normal on Home).
+- **Missed day** (`#missed`): date (not in the future), start, finish, breaks, job/where, reason; all required except breaks.
+- Requests save on the phone and sync like taps (queue type `adjust`), so they work with no signal.
+- **Admins (including Sam):** Home's Dashboard button shows "N to approve". The dashboard's top card **Waiting for approval** lists them oldest first: name, Fix a shift / Missed day, date, when sent, a **Now vs Asked for** table (start, finish, breaks, worked hours, job; changes in bold green), reason, optional note, **Approve** / **Decline**. Any admin can decide any request (including their own: not blocked; ask Wade if he wants that).
+- **Approve** changes the shift (start, finish, breaks replaced, job) and marks it **Adjusted**; a missed day becomes a new shift (no location; not flagged as "no location"). **Decline** changes nothing. Either way the request keeps the original and the requested values forever (audit trail). The dashboard's day view shows adjusted shifts as "Adjusted · approved by <name>", "Was <times>. Reason: …".
+- **Worker notified:** green "✓ Approved" / red "✗ Declined" box on Home (who decided, any note) until they tap OK.
+- Database: `adjustments` (kind shift|day, original + requested JSON, reason, status, reviewer, note, seen) and `shifts.adjusted` (`worker/migrations/0005_adjustments.sql`). API: sync type `adjust`; `GET /api/my/requests`, `POST /api/my/requests/<id>/seen`; `GET /api/admin/requests` (pending; `?status=recent` for the last 30 days decided), `POST /api/admin/requests/<id>` {decision: approve|decline, note}. The phone now keeps 14 days of shifts. Phone storage adds `nzcst.reqs.<person>` and `nzcst.seenReqs`.
 
 ### 4. Leave
 - Types: **Sick, Annual, Bereavement**.
@@ -218,7 +233,7 @@ How step 4 works (built 25-11-2026; details chosen by Claude, tell Wade if any n
 - `people` ✅ and `sessions` ✅ (built in step 1, see Logins).
 - `shifts` ✅ and `breaks` ✅ (built in step 2, `worker/migrations/0002_shifts.sql`). Adjusted flag gets added in step 5.
 - Jobs text ✅ is on `shifts` (`jobs`, `jobs_at`; step 3).
-- `adjustment_requests`: shift, which time, original value, requested value, reason, status, reviewer, reviewed at.
+- `adjustments` ✅ (step 5; covers both fixes and missed days). In-app notification uses `adjustments.seen_at`, so no separate `notifications` table so far.
 - `leave_requests` + `leave_days`: type, date range; one row per day with hours (default 8). Status, reviewer.
 - `timesheet_submissions`: person, fortnight, sent at.
 - `notifications`: in-app messages (e.g. "your adjustment was approved").
@@ -230,15 +245,14 @@ How step 4 works (built 25-11-2026; details chosen by Claude, tell Wade if any n
 2. Clock in/out and breaks, with offline storage and sync. ✅ built 24-11-2026, not deployed yet
 3. Job recording. ✅ built 25-11-2026, not deployed yet
 4. Admin dashboard (live status and daily hours). ✅ built 25-11-2026, not deployed yet (approvals list added in steps 5–6)
-5. Adjustment requests and approvals. ← next
-6. Leave requests and approvals.
+5. Adjustment requests and approvals. ✅ built and live 25-11-2026
+6. Leave requests and approvals. ← next
 7. Fortnightly PDF and sending it.
 8. Test with a few staff, then roll out to everyone.
 
 ## Open questions (to ask when we reach that step)
 
-- Forgot to clock in entirely: can a worker request a whole missing shift through an adjustment?
-- When is a time "approved"? Suggested: every tap is locked once recorded; any change goes through an adjustment request.
+- (Answered 25-11-2026: forgot to clock in → clock in late + adjust start; missed day → missed-day request. Times are locked once recorded; every change goes through a request.)
 - "Send my fortnight": email to Sam, in-app, or both?
 - Fortnight start date.
 
