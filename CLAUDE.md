@@ -10,6 +10,7 @@ This file records the brief and every decision the owner (Wade) makes, so work c
 
 - **24-11-2026:** design stage. Repo created, these notes written.
 - **24-11-2026:** Wade said go on **step 1 (logins and roles)**. Built and tested locally (Worker + app). **Not deployed yet**: the Cloudflare database and Worker still need creating, and GitHub Pages needs turning on (see "Going live" below).
+- **24-11-2026:** Wade said carry on to **step 2 (clocking + offline sync)** before going live. Built and tested locally. Still not deployed.
 
 ## Where things are
 
@@ -46,6 +47,7 @@ This file records the brief and every decision the owner (Wade) makes, so work c
 - `cd worker`, create `.dev.vars` (gitignored) with `SETUP_CODE=<test code>` and `EXTRA_ORIGINS=http://localhost:8765`, then `npx wrangler d1 migrations apply nzcs-timesheet --local` and `npx wrangler dev --local --port 8787`.
 - Serve the repo with `python3 -m http.server 8765` and drive it with Playwright (Chromium is preinstalled), phone-sized (iPhone 13 profile).
 - Step 1 was checked with 26 API tests (PIN rules, lockout, setup code, admin-only routes, deactivation, can't remove own admin) and a phone-sized browser run (login, wrong PIN, offline reopen, Sam's screen, add/edit/turn off person). No errors.
+- Step 2 was checked with 14 API tests (night shift past midnight, re-sent taps not duplicated, two shifts in a day, open break closed at clock-out, location stored / denied flagged, can't touch someone else's shift, Sam can't clock in) and a phone-sized browser run: location explanation, clock in, then **with no signal** break, end break, double-tapped Clock Out (saved once), second clock-in, close and reopen the app, log-out warning; signal back → everything synced with GPS. Also a second person on the same phone with location denied (saved, flagged). No errors.
 
 ## Sister apps (same owner, same setup)
 
@@ -107,7 +109,7 @@ How step 1 works (built 24-11-2026; details chosen by Claude, tell Wade if any n
 - Name list is sorted by first name, showing first name with surname underneath.
 - Home screen says "Kia ora, <first name>". People who clock in see a Today card (placeholder until step 2); admins see an Admin card. Sam (no clock-in) sees only the Admin card.
 - Database: `people` (names, role, clocks_in, active, PIN hash + salt, failed tries, lock time) and `sessions` (only a SHA-256 of each login token is stored). The 13 staff are added by `worker/migrations/0001_people.sql`. A daily cron removes expired logins.
-- Phone storage keys: `nzcst.token`, `nzcst.me`.
+- Phone storage keys: `nzcst.token`, `nzcst.me`, `nzcst.locInfoSeen`; IndexedDB `nzcst-data` (stores `queue` and `shifts`).
 - **For step 2:** turning off a login or a token expiring must never lose entries still waiting to sync on the phone. Keep the queue and ask them to log in again.
 
 ## Features (from the brief)
@@ -118,6 +120,22 @@ How step 1 works (built 24-11-2026; details chosen by Claude, tell Wade if any n
 - Total hours = time on site minus breaks.
 - **Breaks (Wade, 24-11-2026):** only Start Break / End Break. **No** rest vs meal break split and no paid/unpaid break rules: "the workers can figure out the rest". All break time is deducted, as the brief says.
 - Worker home screen shows today's status at a glance (e.g. "Clocked in since 7:02am", "On break").
+- **More than one shift a day is allowed (Wade, 24-11-2026):** clock out and clock back in later the same day. Each is its own shift; the day's total adds them up.
+- **No undo and no "are you sure?" (Wade, 24-11-2026):** every tap saves straight away. Mistakes are fixed through an adjustment request (step 5). (Claude had suggested a 2-minute undo; Wade chose neither.) A fast double tap is still only saved once.
+- **Shifts past midnight (Wade, 24-11-2026: crews sometimes work past midnight, e.g. night shooting):** a shift counts on the NZ date it **started**.
+
+How step 2 works (built 24-11-2026):
+
+- Home screen (people who clock in): sync line, then the **Today** card: day and date, big status ("Not clocked in" / "Clocked in since 7:02am" / "On break since 10:15am" / "Clocked out at 4:30pm"), then **only the buttons that make sense**: Not clocked in → **Clock In**. Clocked in → **Start Break** (orange) and **Clock Out**. On break → **End Break** and a smaller **Clock Out**. Below: Worked today and Breaks totals (count up live) and a list of today's shifts with their breaks.
+- Clocking out while on a break ends the break at the clock-out time.
+- Still clocked in from an earlier day: amber note "You've been clocked in since <day> at <time>. If you forgot to clock out, clock out now and ask an admin to fix the time." The shift stays on its start day.
+- **Location:** before a person's first Clock In on a phone, a box explains that location is recorded only at Clock In and Clock Out and to choose "Allow while using the app" (then "OK, clock me in"). The tap's time is saved instantly; GPS is added when it arrives (waits up to 20 s). Denied or no fix → saved as `denied` / `unavailable` and the shift shows "Location not recorded" (admins see it as "no location" in step 4).
+- **Offline:** every tap is saved on the phone first (IndexedDB queue, in tap order, tagged with the person) and sent to `POST /api/sync`. IDs are made on the phone, so a tap sent twice is only saved once. Sync runs after each tap, when signal returns, when the app comes to the front, and every minute. The sync line says "✓ All synced" or "N entries waiting to sync (no signal)" with **Try now**. If the server rejects an entry it stays on the phone and the line turns red with the reason.
+- Times are the **phone's time at the tap**, not the sync time. The server also stores when it received each shift (`created_at`) so late or odd syncs can be spotted.
+- Logging out with entries waiting warns "N entries haven't synced yet…"; they stay on the phone and sync when that person logs back in there. A different person logging in on the same phone never sends or sees them.
+- When nothing is waiting, the phone's copy is refreshed from the server (`GET /api/my/shifts`, last 7 days plus any open shift), so using two phones stays consistent.
+- Sam (clocks in: No) can't sync (403) and has no Today card.
+- **Not yet (step 3):** the required jobs box before Clock Out.
 
 ### 1a. Clock-in and clock-out location
 - GPS recorded automatically on Clock In and Clock Out only, with no extra step. Not tracked all day; no background location.
@@ -168,8 +186,7 @@ How step 1 works (built 24-11-2026; details chosen by Claude, tell Wade if any n
 ## Planned database (D1, draft)
 
 - `people` ✅ and `sessions` ✅ (built in step 1, see Logins).
-- `shifts`: person, NZ date, clock-in time, clock-out time, GPS for each (or "no location" flag), jobs text, adjusted flag.
-- `breaks`: shift, start, end (several per shift).
+- `shifts` ✅ and `breaks` ✅ (built in step 2, `worker/migrations/0002_shifts.sql`). Jobs text and adjusted flag get added in steps 3 and 5.
 - `adjustment_requests`: shift, which time, original value, requested value, reason, status, reviewer, reviewed at.
 - `leave_requests` + `leave_days`: type, date range; one row per day with hours (default 8). Status, reviewer.
 - `timesheet_submissions`: person, fortnight, sent at.
@@ -179,8 +196,8 @@ How step 1 works (built 24-11-2026; details chosen by Claude, tell Wade if any n
 ## Build order (from the brief)
 
 1. Logins and roles (worker and admin). ✅ built 24-11-2026, not deployed yet
-2. Clock in/out and breaks, with offline storage and sync. ← next
-3. Job recording.
+2. Clock in/out and breaks, with offline storage and sync. ✅ built 24-11-2026, not deployed yet
+3. Job recording. ← next
 4. Admin dashboard (live status and daily hours).
 5. Adjustment requests and approvals.
 6. Leave requests and approvals.
@@ -189,7 +206,6 @@ How step 1 works (built 24-11-2026; details chosen by Claude, tell Wade if any n
 
 ## Open questions (to ask when we reach that step)
 
-- More than one shift per day (clock out and back in), or shifts past midnight?
 - Forgot to clock in entirely: can a worker request a whole missing shift through an adjustment?
 - When is a time "approved"? Suggested: every tap is locked once recorded; any change goes through an adjustment request.
 - "Send my fortnight": email to Sam, in-app, or both?

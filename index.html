@@ -91,7 +91,28 @@ input.pin-input{letter-spacing:.5em;font-variant-numeric:tabular-nums;max-width:
 .person .tags{display:flex;gap:6px;flex-wrap:wrap}
 .person.inactive b{color:var(--muted);text-decoration:line-through}
 
-.status-big{font-family:var(--f-display);font-size:28px;font-weight:700;line-height:1.1}
+.status-big{font-family:var(--f-display);font-size:30px;font-weight:700;line-height:1.1}
+
+/* Clocking: one or two huge buttons, only the ones that make sense right now. */
+.clock-btns{display:grid;gap:12px}
+.clock-btns button{min-height:96px;font-size:28px;font-weight:700;border-radius:14px;border-width:3px}
+.clock-btns button.second{min-height:72px;font-size:22px}
+.b-in{background:var(--forest);border-color:var(--forest);color:var(--forest-ink)}
+.b-break{background:var(--hivis);border-color:var(--hivis);color:#1a0d05}
+.b-endbreak{background:var(--forest);border-color:var(--forest);color:var(--forest-ink)}
+.b-out{background:var(--surface);border-color:var(--danger);color:var(--danger)}
+.totals{display:flex;gap:10px;flex-wrap:wrap}
+.totals div{flex:1 1 120px;background:var(--sunken);border-radius:10px;padding:10px 12px}
+.totals span{display:block;font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.totals b{font-size:24px;font-variant-numeric:tabular-nums}
+.shifts{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+.shifts li{border-left:4px solid var(--forest);padding:4px 0 4px 10px;font-variant-numeric:tabular-nums}
+.shifts li small{display:block;color:var(--muted);font-size:14px}
+.loc-info{background:var(--forest-soft);border-radius:var(--r);padding:14px;display:grid;gap:8px}
+.loc-info p{margin:0}
+.sync{border-radius:var(--r);padding:10px 14px;margin-bottom:14px;font-weight:600;background:var(--amber-soft);color:var(--amber);display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.sync.ok{background:transparent;color:var(--forest);padding:0 2px;font-weight:500;font-size:15px}
+.sync.bad{background:var(--danger-soft);color:var(--danger)}
 </style>
 </head>
 <body>
@@ -147,10 +168,22 @@ input.pin-input{letter-spacing:.5em;font-variant-numeric:tabular-nums;max-width:
   <!-- Home -->
   <main id="s-home" hidden>
     <h2 class="screen" id="home-hello"></h2>
+    <div class="sync" id="sync" hidden></div>
     <section class="card" id="today-card" hidden>
-      <h3>Today</h3>
+      <h3 id="today-date">Today</h3>
       <div class="status-big" id="today-status">Not clocked in</div>
-      <p class="muted" style="margin:0">Clock In, breaks and Clock Out are coming in the next step of the build.</p>
+      <p class="note" id="stale-note" hidden></p>
+      <div class="loc-info" id="loc-info" hidden>
+        <b>About your location</b>
+        <p>This app records where you are <b>only when you tap Clock In and Clock Out</b>. It does not track you during the day.</p>
+        <p>Your phone will now ask about location. Please choose <b>Allow while using the app</b>.</p>
+        <button class="btn-primary btn-wide" id="loc-ok">OK, clock me in</button>
+        <button class="btn-ghost btn-wide" id="loc-cancel">Cancel</button>
+      </div>
+      <div class="clock-btns" id="clock-btns"></div>
+      <div class="totals" id="totals"></div>
+      <ul class="shifts" id="shift-list"></ul>
+      <p class="err" id="clock-err"></p>
     </section>
     <section class="card" id="admin-card" hidden>
       <h3>Admin</h3>
@@ -333,13 +366,228 @@ function showHome(){
   $("home-hello").textContent = "Kia ora, " + me.first_name;
   $("today-card").hidden = !me.clocks_in;
   $("admin-card").hidden = me.role !== "admin";
+  if (me.clocks_in){ loadShifts().then(renderToday); sync(); }
+  else $("sync").hidden = true;
 }
 $("to-people").onclick = () => location.hash = "people";
 $("logout").onclick = async () => {
-  if (!confirm("Log out? You'll need your PIN to log back in.")) return;
+  const waiting = me.clocks_in ? (await myQueue()).length : 0;
+  const msg = waiting
+    ? `${waiting} ${waiting === 1 ? "entry hasn't" : "entries haven't"} synced yet. They stay saved on this phone and will sync when you log back in here. Log out?`
+    : "Log out? You'll need your PIN to log back in.";
+  if (!confirm(msg)) return;
   try{ await api("/api/logout", {method: "POST"}); }catch(e){}
   logOutHere();
 };
+
+/* ---------- Clocking (offline-first) ----------
+   Every tap is saved on the phone first (IndexedDB "nzcst-data"):
+   - "shifts": this phone's copy of the person's recent shifts, so the screen works with no signal.
+   - "queue": taps waiting to go to the server, in the order they were made, each tagged with who made it.
+   The server copy replaces the phone copy only when nothing is waiting to sync. */
+const NZ = "Pacific/Auckland";
+const K_LOCINFO = "nzcst.locInfoSeen";
+const LOC_WAIT_MS = 20000;   // how long to wait for GPS after Clock In / Clock Out
+let db = null, shifts = [], syncing = false, syncProblem = "";
+
+function openDB(){
+  if (db) return Promise.resolve(db);
+  return new Promise((res, rej) => {
+    const r = indexedDB.open("nzcst-data", 1);
+    r.onupgradeneeded = () => {
+      const d = r.result;
+      d.createObjectStore("queue", {keyPath: "seq", autoIncrement: true});
+      d.createObjectStore("shifts", {keyPath: "id"}).createIndex("person", "person_id");
+    };
+    r.onsuccess = () => { db = r.result; res(db); };
+    r.onerror = () => rej(r.error);
+  });
+}
+async function tx(store, mode, fn){
+  const d = await openDB();
+  return new Promise((res, rej) => {
+    const t = d.transaction(store, mode), s = t.objectStore(store);
+    let out; const r = fn(s);
+    if (r) r.onsuccess = () => { out = r.result; };
+    t.oncomplete = () => res(out); t.onerror = () => rej(t.error); t.onabort = () => rej(t.error);
+  });
+}
+// Read-change-write of one record inside a single transaction, so nothing can change it in between.
+async function patch(store, key, fn){
+  const d = await openDB();
+  return new Promise((res, rej) => {
+    const t = d.transaction(store, "readwrite"), st = t.objectStore(store), r = st.get(key);
+    r.onsuccess = () => { if (r.result){ fn(r.result); st.put(r.result); } };
+    t.oncomplete = () => res(); t.onerror = () => rej(t.error);
+  });
+}
+const myQueue = async () => (await tx("queue", "readonly", s => s.getAll())).filter(q => q.person_id === me.id);
+const queueAdd = item => tx("queue", "readwrite", s => s.add(item));
+const queueDel = seqs => tx("queue", "readwrite", s => { seqs.forEach(k => s.delete(k)); });
+const shiftPut = sh => tx("shifts", "readwrite", s => s.put(sh));
+async function loadShifts(){
+  shifts = (await tx("shifts", "readonly", s => s.index("person").getAll(me.id))).sort((a, b) => a.clock_in_at < b.clock_in_at ? -1 : 1);
+}
+async function replaceShifts(list){
+  const mine = await tx("shifts", "readonly", s => s.index("person").getAllKeys(me.id));
+  await tx("shifts", "readwrite", s => { mine.forEach(k => s.delete(k)); list.forEach(sh => s.put({...sh, person_id: me.id})); });
+  await loadShifts();
+}
+
+// Dates and times, always in NZ time.
+const nzDate = d => new Intl.DateTimeFormat("en-CA", {timeZone: NZ, year: "numeric", month: "2-digit", day: "2-digit"}).format(new Date(d));
+const nzTime = d => new Date(d).toLocaleTimeString("en-NZ", {timeZone: NZ, hour: "numeric", minute: "2-digit", hour12: true}).replace(/\s/g, "").toLowerCase();
+const nzDayLabel = d => { const p = nzDate(d).split("-"); return new Date(d).toLocaleDateString("en-NZ", {timeZone: NZ, weekday: "long"}) + " " + p[2] + "-" + p[1] + "-" + p[0]; };
+const dmy = ymd => ymd.split("-").reverse().join("-");
+function hm(ms){ const m = Math.max(0, Math.round(ms / 60000)); return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`; }
+const uuid = () => crypto.randomUUID();
+
+// Worked time = on site minus breaks (running shifts and breaks count up to now).
+function breakMs(sh, nowMs){ return sh.breaks.reduce((t, b) => t + ((b.end_at ? Date.parse(b.end_at) : nowMs) - Date.parse(b.start_at)), 0); }
+function workedMs(sh, nowMs){ return (sh.clock_out_at ? Date.parse(sh.clock_out_at) : nowMs) - Date.parse(sh.clock_in_at) - breakMs(sh, nowMs); }
+const openShift = () => shifts.find(s => !s.clock_out_at);
+const openBreak = sh => sh && sh.breaks.find(b => !b.end_at);
+
+function renderToday(){
+  if ($("s-home").hidden || !me || !me.clocks_in) return;
+  const nowMs = Date.now(), today = nzDate(nowMs);
+  const open = openShift(), brk = openBreak(open);
+  $("today-date").textContent = "Today · " + nzDayLabel(nowMs);
+  // Status line
+  let status = "Not clocked in";
+  if (brk) status = "On break since " + nzTime(brk.start_at);
+  else if (open) status = "Clocked in since " + nzTime(open.clock_in_at);
+  else { const last = shifts.filter(s => s.work_date === today).pop(); if (last) status = "Clocked out at " + nzTime(last.clock_out_at); }
+  $("today-status").textContent = status;
+  // Still clocked in from an earlier day (forgot to clock out, or a night shift)
+  const stale = open && open.work_date !== today;
+  $("stale-note").hidden = !stale;
+  if (stale) $("stale-note").textContent = `You've been clocked in since ${nzDayLabel(open.clock_in_at)} at ${nzTime(open.clock_in_at)}. If you forgot to clock out, clock out now and ask an admin to fix the time.`;
+  // Buttons: only the ones that make sense right now
+  $("clock-btns").innerHTML = !open ? `<button class="b-in" data-act="clock_in">Clock In</button>`
+    : brk ? `<button class="b-endbreak" data-act="break_end">End Break</button><button class="b-out second" data-act="clock_out">Clock Out</button>`
+    : `<button class="b-break" data-act="break_start">Start Break</button><button class="b-out" data-act="clock_out">Clock Out</button>`;
+  $("clock-btns").hidden = !$("loc-info").hidden;
+  // Today's totals and shifts (a shift past midnight stays on the day it started)
+  const todays = shifts.filter(s => s.work_date === today || s === open);
+  const worked = todays.reduce((t, s) => t + workedMs(s, nowMs), 0), breaks = todays.reduce((t, s) => t + breakMs(s, nowMs), 0);
+  $("totals").innerHTML = todays.length ? `<div><span>Worked today</span><b>${hm(worked)}</b></div><div><span>Breaks</span><b>${hm(breaks)}</b></div>` : "";
+  $("shift-list").innerHTML = todays.map(s => {
+    const bl = s.breaks.map(b => `${nzTime(b.start_at)}–${b.end_at ? nzTime(b.end_at) : "now"}`);
+    const noLoc = [s.in_loc, s.out_loc].some(l => l && (l.status === "denied" || l.status === "unavailable"));
+    return `<li><b>${nzTime(s.clock_in_at)} – ${s.clock_out_at ? nzTime(s.clock_out_at) : "now"}</b>${s.work_date !== today ? ` <small>started ${dmy(s.work_date)}</small>` : ""}
+      ${bl.length ? `<small>Break${bl.length > 1 ? "s" : ""}: ${bl.join(", ")}</small>` : ""}${noLoc ? `<small>Location not recorded</small>` : ""}</li>`;
+  }).join("");
+}
+setInterval(renderToday, 30000);
+
+async function renderSync(){
+  if (!me || !me.clocks_in){ $("sync").hidden = true; return; }
+  const n = (await myQueue()).length;
+  const el = $("sync"); el.hidden = false;
+  if (syncProblem){ el.className = "sync bad"; el.textContent = syncProblem; return; }
+  if (n){ el.className = "sync"; el.innerHTML = `<span>${n} ${n === 1 ? "entry" : "entries"} waiting to sync${navigator.onLine ? "" : " (no signal)"}</span><button class="btn-small" id="sync-now">Try now</button>`; $("sync-now").onclick = () => sync(); }
+  else { el.className = "sync ok"; el.textContent = "✓ All synced"; }
+}
+
+// GPS for Clock In / Clock Out. Never blocks the tap: the time is saved first, the location is added when it comes.
+function getLocation(){
+  return new Promise(res => {
+    if (!navigator.geolocation) return res({status: "unavailable"});
+    const timer = setTimeout(() => res({status: "unavailable"}), LOC_WAIT_MS);
+    navigator.geolocation.getCurrentPosition(
+      p => { clearTimeout(timer); res({status: "ok", lat: +p.coords.latitude.toFixed(6), lng: +p.coords.longitude.toFixed(6), acc: Math.round(p.coords.accuracy)}); },
+      e => { clearTimeout(timer); res({status: e.code === 1 ? "denied" : "unavailable"}); },
+      {enableHighAccuracy: true, timeout: LOC_WAIT_MS - 1000, maximumAge: 60000});
+  });
+}
+
+let tapping = false;   // ignores a second tap while the first is being saved (gloves, double taps)
+async function tap(act){
+  if (tapping) return;
+  tapping = true;
+  try{ await doTap(act); }
+  catch(e){ $("clock-err").textContent = "Couldn't save that tap on this phone. Try again. (" + e.message + ")"; }
+  finally{ tapping = false; }
+}
+async function doTap(act){
+  $("clock-err").textContent = "";
+  await loadShifts();   // in case another tab changed things
+  const at = new Date().toISOString(), open = openShift(), brk = openBreak(open);
+  let ev, sh, locKey = null;
+  if (act === "clock_in"){
+    if (open) return renderToday();
+    sh = {id: uuid(), person_id: me.id, work_date: nzDate(at), clock_in_at: at, clock_out_at: null, in_loc: {status: "pending"}, out_loc: null, breaks: []};
+    ev = {type: "clock_in", id: sh.id, at, loc: {status: "pending"}}; locKey = "in_loc";
+  }else if (act === "break_start"){
+    if (!open || brk) return renderToday();
+    sh = open; const b = {id: uuid(), start_at: at, end_at: null}; sh.breaks.push(b);
+    ev = {type: "break_start", id: b.id, shift_id: sh.id, at};
+  }else if (act === "break_end"){
+    if (!brk) return renderToday();
+    sh = open; brk.end_at = at;
+    ev = {type: "break_end", id: brk.id, at};
+  }else if (act === "clock_out"){
+    if (!open) return renderToday();
+    sh = open; if (brk) brk.end_at = at;   // clocking out while on break ends the break
+    sh.clock_out_at = at; sh.out_loc = {status: "pending"};
+    ev = {type: "clock_out", id: sh.id, at, loc: {status: "pending"}}; locKey = "out_loc";
+  }else return;
+  await shiftPut(sh);
+  const seq = await queueAdd({person_id: me.id, eid: uuid(), made: Date.now(), ...ev});
+  await loadShifts(); renderToday(); renderSync();
+  if (locKey) addLocation(seq, sh.id, locKey); else sync();
+}
+async function addLocation(seq, shiftId, locKey){
+  const loc = await getLocation();
+  await patch("queue", seq, q => { q.loc = loc; });
+  await patch("shifts", shiftId, sh => { sh[locKey] = loc; });
+  await loadShifts(); renderToday();
+  sync();
+}
+$("clock-btns").addEventListener("click", e => {
+  const b = e.target.closest("button[data-act]"); if (!b) return;
+  if (b.dataset.act === "clock_in" && !store.get(K_LOCINFO)){   // explain location once, before the phone asks
+    $("loc-info").hidden = false; renderToday(); return;
+  }
+  tap(b.dataset.act);
+});
+$("loc-ok").onclick = () => { store.set(K_LOCINFO, "1"); $("loc-info").hidden = true; tap("clock_in"); };
+$("loc-cancel").onclick = () => { $("loc-info").hidden = true; renderToday(); };
+
+// Sends waiting taps (oldest first), then refreshes the phone copy from the server when nothing is left.
+async function sync(){
+  if (!me || !me.clocks_in || !store.get(K_TOKEN) || syncing) return;
+  syncing = true;
+  try{
+    let queue = await myQueue();
+    // A tap still waiting for its GPS holds back itself and everything after it (keeps the order), for up to the GPS wait.
+    const cut = queue.findIndex(q => q.loc && q.loc.status === "pending" && Date.now() - q.made < LOC_WAIT_MS + 5000);
+    const sending = (cut === -1 ? queue : queue.slice(0, cut)).map(q => {
+      const {seq, person_id, made, ...ev} = q;
+      if (ev.loc && ev.loc.status === "pending") ev.loc = {status: "unavailable"};
+      return ev;
+    });
+    if (sending.length){
+      const res = await api("/api/sync", {method: "POST", body: {events: sending}});
+      const done = new Set(res.done);
+      await queueDel(queue.filter(q => done.has(q.eid)).map(q => q.seq));
+      syncProblem = res.errors.length ? `${res.errors.length} ${res.errors.length === 1 ? "entry" : "entries"} couldn't be saved on the server (${res.errors[0].error}). They're kept on this phone. Tell an admin if this doesn't clear.` : "";
+    }else syncProblem = "";
+    if (!(await myQueue()).length){
+      const data = await api("/api/my/shifts");
+      await replaceShifts(data.shifts);
+    }
+  }catch(e){
+    if (e.status === 401){ syncProblem = ""; syncing = false; return logOutHere(); }
+    if (e.status === 403) syncProblem = e.message;
+    // No signal: try again later. Nothing is lost.
+  }finally{ syncing = false; }
+  renderToday(); renderSync();
+}
+window.addEventListener("online", () => sync());
+document.addEventListener("visibilitychange", () => { if (!document.hidden){ renderToday(); sync(); } });
+setInterval(() => sync(), 60000);
 function logOutHere(){
   store.del(K_TOKEN); store.del(K_ME); me = null;
   history.replaceState(null, "", location.pathname + location.search);

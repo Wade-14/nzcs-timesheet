@@ -1,9 +1,9 @@
-// NZCS Timesheet API: logins (name + 4-digit PIN) and people, stored in Cloudflare D1.
+// NZCS Timesheet API: logins (name + 4-digit PIN), people, and clock in/out + breaks, stored in Cloudflare D1.
 // Each person has their own login. PINs are stored only as salted PBKDF2 hashes.
 // SETUP_CODE (Cloudflare secret) lets someone set the first PIN for a person who has none yet.
 
 const ALLOWED_ORIGINS = ["https://wade-14.github.io"];
-const MAX_BODY = 20_000;
+const MAX_BODY = 200_000;          // a big offline backlog of taps is ~60 KB
 const SESSION_DAYS = 365;          // phones stay logged in, so the app works offline after the first login
 const MAX_TRIES = 5;               // wrong PINs in a row before the login is locked
 const LOCK_MINUTES = 15;
@@ -183,6 +183,99 @@ async function adminSetPin(req, env, id) {
   return { person: publicPerson(await getPerson(env, p.id)) };
 }
 
+/* ---------- Clocking (step 2) ---------- */
+
+const MAX_EVENTS = 200;
+const isId = v => /^[0-9a-f-]{32,36}$/.test(String(v ?? ""));
+const isTime = v => typeof v === "string" && v.length <= 40 && !Number.isNaN(Date.parse(v));
+const iso = v => new Date(v).toISOString();
+// NZ calendar date (yyyy-mm-dd) of a moment, in Pacific/Auckland time.
+const nzDate = v => new Intl.DateTimeFormat("en-CA", { timeZone: "Pacific/Auckland", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(v));
+const LOC_STATUSES = ["ok", "denied", "unavailable"];
+function cleanLoc(l) {
+  const status = l && LOC_STATUSES.includes(l.status) ? l.status : "unavailable";
+  if (status !== "ok") return { status, lat: null, lng: null, acc: null };
+  const lat = Number(l.lat), lng = Number(l.lng), acc = Number(l.acc);
+  if (!(Math.abs(lat) <= 90 && Math.abs(lng) <= 180)) return { status: "unavailable", lat: null, lng: null, acc: null };
+  return { status, lat, lng, acc: Number.isFinite(acc) ? Math.round(acc) : null };
+}
+
+// Applies one tap from the phone. Every step is safe to repeat (signal can drop after the server saved it).
+async function applyEvent(env, person, ev) {
+  if (!ev || typeof ev !== "object") throw new Error("Unreadable entry.");
+  if (!isId(ev.id) || !isTime(ev.at)) throw new Error("Entry is missing its id or time.");
+  const at = iso(ev.at), t = now();
+  const ownShift = async id => {
+    const s = await env.DB.prepare("SELECT * FROM shifts WHERE id = ?1").bind(String(id)).first();
+    if (!s) throw new Error("Its shift hasn't reached the server.");
+    if (s.person_id !== person.id) throw new Error("That shift belongs to someone else.");
+    return s;
+  };
+  if (ev.type === "clock_in") {
+    const existing = await env.DB.prepare("SELECT person_id FROM shifts WHERE id = ?1").bind(ev.id).first();
+    if (existing) { if (existing.person_id !== person.id) throw new Error("That shift belongs to someone else."); return; }
+    const l = cleanLoc(ev.loc);
+    await env.DB.prepare(`INSERT INTO shifts (id, person_id, work_date, clock_in_at, in_lat, in_lng, in_acc, in_loc, created_at, updated_at)
+      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)`).bind(ev.id, person.id, nzDate(at), at, l.lat, l.lng, l.acc, l.status, t).run();
+    return;
+  }
+  if (ev.type === "break_start") {
+    const s = await ownShift(ev.shift_id);
+    const b = await env.DB.prepare("SELECT shift_id FROM breaks WHERE id = ?1").bind(ev.id).first();
+    if (b) { if (b.shift_id !== s.id) throw new Error("Break mix-up."); return; }
+    await env.DB.prepare("INSERT INTO breaks (id, shift_id, start_at, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)").bind(ev.id, s.id, at, t).run();
+    return;
+  }
+  if (ev.type === "break_end") {
+    const b = await env.DB.prepare("SELECT * FROM breaks WHERE id = ?1").bind(ev.id).first();
+    if (!b) throw new Error("Its break hasn't reached the server.");
+    await ownShift(b.shift_id);
+    await env.DB.prepare("UPDATE breaks SET end_at = ?1, updated_at = ?2 WHERE id = ?3 AND end_at IS NULL").bind(at, t, ev.id).run();
+    return;
+  }
+  if (ev.type === "clock_out") {
+    const s = await ownShift(ev.id);
+    if (s.clock_out_at) return;
+    const l = cleanLoc(ev.loc);
+    await env.DB.batch([
+      // A break still running when they clock out ends at the clock-out time.
+      env.DB.prepare("UPDATE breaks SET end_at = ?1, updated_at = ?2 WHERE shift_id = ?3 AND end_at IS NULL").bind(at, t, s.id),
+      env.DB.prepare(`UPDATE shifts SET clock_out_at = ?1, out_lat = ?2, out_lng = ?3, out_acc = ?4, out_loc = ?5, updated_at = ?6
+        WHERE id = ?7 AND clock_out_at IS NULL`).bind(at, l.lat, l.lng, l.acc, l.status, t, s.id),
+    ]);
+    return;
+  }
+  throw new Error("Unknown kind of entry.");
+}
+
+async function syncEvents(req, env, me) {
+  if (!me.person.clocks_in) throw new HttpError(403, "Your login isn't set up to clock in.");
+  const b = await readBody(req);
+  const events = Array.isArray(b.events) ? b.events.slice(0, MAX_EVENTS) : [];
+  const done = [], errors = [];
+  for (const ev of events) {   // in the order they were tapped
+    try { await applyEvent(env, me.person, ev); done.push(ev.eid); }
+    catch (e) { errors.push({ eid: ev && ev.eid, error: e.message }); }
+  }
+  return { done, errors };
+}
+
+// Shifts (with breaks) for one person: from a date onwards, plus any still open.
+async function shiftsFor(env, personId, fromDate) {
+  const { results: shifts } = await env.DB.prepare(
+    `SELECT * FROM shifts WHERE person_id = ?1 AND (work_date >= ?2 OR clock_out_at IS NULL) ORDER BY clock_in_at`).bind(personId, fromDate).all();
+  if (!shifts.length) return [];
+  const ids = shifts.map(s => s.id);
+  const { results: breaks } = await env.DB.prepare(
+    `SELECT * FROM breaks WHERE shift_id IN (${ids.map((_, i) => `?${i + 1}`).join(",")}) ORDER BY start_at`).bind(...ids).all();
+  return shifts.map(s => ({
+    id: s.id, work_date: s.work_date, clock_in_at: s.clock_in_at, clock_out_at: s.clock_out_at,
+    in_loc: { status: s.in_loc, lat: s.in_lat, lng: s.in_lng, acc: s.in_acc },
+    out_loc: s.clock_out_at ? { status: s.out_loc, lat: s.out_lat, lng: s.out_lng, acc: s.out_acc } : null,
+    breaks: breaks.filter(b => b.shift_id === s.id).map(b => ({ id: b.id, start_at: b.start_at, end_at: b.end_at })),
+  }));
+}
+
 async function route(req, env) {
   const url = new URL(req.url);
   const path = url.pathname.replace(/\/+$/, "");
@@ -203,6 +296,13 @@ async function route(req, env) {
   if (path === "/api/logout" && m === "POST") {
     await env.DB.prepare("DELETE FROM sessions WHERE token_hash = ?1").bind(me.tokenHash).run();
     return { ok: true };
+  }
+
+  if (path === "/api/sync" && m === "POST") return syncEvents(req, env, me);
+  if (path === "/api/my/shifts" && m === "GET") {
+    const from = url.searchParams.get("from");
+    const fromDate = /^\d{4}-\d{2}-\d{2}$/.test(from || "") ? from : nzDate(Date.now() - 7 * 86400_000);
+    return { shifts: await shiftsFor(env, me.person.id, fromDate), today: nzDate(Date.now()) };
   }
 
   if (path.startsWith("/api/admin/")) {
