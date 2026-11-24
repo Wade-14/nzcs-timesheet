@@ -7,7 +7,7 @@ workers_dev = true
 [[d1_databases]]
 binding = "DB"
 database_name = "nzcs-timesheet"
-database_id = "00000000-0000-0000-0000-000000000000"   # replaced with the real id when the database is created
+database_id = "1296243b-702e-4288-813e-0a039ef54f27"
 migrations_dir = "migrations"
 
 [triggers]
