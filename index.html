@@ -1,0 +1,453 @@
+<!doctype html>
+<html lang="en-NZ">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>NZCS Timesheet</title>
+<meta name="theme-color" content="#1d5a40">
+<meta name="robots" content="noindex,nofollow">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Public+Sans:wght@400;500;600;700&display=swap">
+<style>
+/* Same look as NZCS Forms, with bigger targets: used with gloves on, outdoors, in bright sun. */
+:root{
+  --bg:#eef2ee; --surface:#ffffff; --sunken:#f5f7f4; --line:#c3cdc4; --ink:#0f1a13; --muted:#4a594f;
+  --forest:#1d5a40; --forest-ink:#ffffff; --forest-soft:#dcebe2; --hivis:#e0692a;
+  --amber:#7a4800; --amber-soft:#fbecd3; --danger:#b3261e; --danger-soft:#fbe4e2;
+  --f-display:"Barlow Condensed","Arial Narrow",system-ui,sans-serif;
+  --f-body:"Public Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --r:12px;
+}
+@media (prefers-color-scheme: dark){:root{
+  --bg:#101713; --surface:#18221c; --sunken:#131c17; --line:#34443a; --ink:#eef4f0; --muted:#a6b6ab;
+  --forest:#5fb88c; --forest-ink:#0c1a12; --forest-soft:#1f3a2c; --hivis:#f08a4f;
+  --amber:#f2b45a; --amber-soft:#3a2c14; --danger:#ff8a80; --danger-soft:#3a1a18; color-scheme:dark}}
+
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+:root{padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;-webkit-text-size-adjust:100%;background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:17px;line-height:1.45}
+.wrap{max-width:640px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:18px 60px}
+header.top{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap;padding-bottom:12px;border-bottom:3px solid var(--forest);margin-bottom:18px}
+.brand small{display:block;font-family:var(--f-display);text-transform:uppercase;letter-spacing:.12em;font-size:13px;color:var(--muted);font-weight:600}
+.brand h1{margin:0;font-family:var(--f-display);font-weight:700;font-size:32px;line-height:1}
+.pill{font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--forest);background:var(--forest-soft);border-radius:999px;padding:3px 9px;white-space:nowrap}
+.pill.warn{color:var(--amber);background:var(--amber-soft)}
+.pill.off{color:var(--danger);background:var(--danger-soft)}
+
+h2.screen{font-family:var(--f-display);font-weight:700;font-size:26px;margin:0 0 14px}
+section.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:18px;margin-bottom:14px;display:grid;gap:14px}
+section.card>h3{margin:0;font-family:var(--f-display);font-weight:600;font-size:15px;letter-spacing:.14em;text-transform:uppercase;color:var(--forest)}
+.muted{color:var(--muted)}
+.err{color:var(--danger);font-weight:600;min-height:1.4em}
+.err:empty{min-height:0;margin:0}
+.note{background:var(--amber-soft);color:var(--amber);border-radius:var(--r);padding:12px 14px;font-weight:600}
+
+button,.btn{font:inherit;font-weight:600;font-size:17px;border-radius:10px;border:2px solid var(--line);background:var(--surface);color:var(--ink);padding:10px 16px;min-height:52px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:8px;text-decoration:none;touch-action:manipulation}
+button:disabled{opacity:.55;cursor:default}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid var(--hivis);outline-offset:1px}
+.btn-primary{background:var(--forest);border-color:var(--forest);color:var(--forest-ink)}
+.btn-danger{background:transparent;border-color:var(--danger);color:var(--danger)}
+.btn-ghost{background:transparent;border-color:transparent;color:var(--forest);padding-inline:8px}
+.btn-small{min-height:44px;padding:6px 12px;font-size:15px}
+.btn-wide{width:100%}
+.btns{display:flex;gap:10px;flex-wrap:wrap}
+
+/* Login: names */
+.names{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media (max-width:360px){.names{grid-template-columns:1fr}}
+.names button{min-height:68px;font-size:19px;line-height:1.15;flex-direction:column;gap:2px;padding:8px}
+.names button span{font-weight:500;font-size:15px;color:var(--muted)}
+
+/* Login: PIN pad */
+.pin-who{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+.pin-who b{font-size:24px;font-family:var(--f-display)}
+.dots{display:flex;gap:18px;justify-content:center;margin:18px 0 8px}
+.dots i{width:22px;height:22px;border-radius:50%;border:3px solid var(--forest)}
+.dots i.on{background:var(--forest)}
+.pad{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;max-width:360px;margin:0 auto}
+.pad button{min-height:72px;font-size:30px;font-weight:700;font-variant-numeric:tabular-nums}
+.pad button.alt{font-size:18px;font-weight:600;background:var(--sunken)}
+
+/* Forms */
+.field{display:grid;gap:6px}
+label,.label{font-weight:600;font-size:15px}
+input[type=text],input[type=password],input[type=tel]{width:100%;font:inherit;font-size:18px;color:var(--ink);background:var(--sunken);border:2px solid var(--line);border-radius:10px;padding:12px;min-height:54px}
+input.pin-input{letter-spacing:.5em;font-variant-numeric:tabular-nums;max-width:200px}
+.seg{display:inline-flex;border:2px solid var(--line);border-radius:10px;overflow:hidden;justify-self:start}
+.seg button{border:0;border-radius:0;min-width:110px;background:var(--sunken)}
+.seg button+button{border-left:2px solid var(--line)}
+.seg button[aria-pressed="true"]{background:var(--forest);color:var(--forest-ink)}
+
+/* People list */
+.people{display:grid;gap:8px}
+.person{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
+.person .who{display:grid;gap:4px;min-width:0}
+.person .who b{font-size:18px;overflow-wrap:anywhere}
+.person .tags{display:flex;gap:6px;flex-wrap:wrap}
+.person.inactive b{color:var(--muted);text-decoration:line-through}
+
+.status-big{font-family:var(--f-display);font-size:28px;font-weight:700;line-height:1.1}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand"><small>NZ Conservation Services</small><h1>Timesheet</h1></div>
+    <div class="btns" id="who-bar" hidden>
+      <span class="pill" id="who-role"></span>
+    </div>
+  </header>
+
+  <!-- Who are you? -->
+  <main id="s-names" hidden>
+    <h2 class="screen">Who are you?</h2>
+    <p class="err" id="names-err"></p>
+    <div class="names" id="names"></div>
+    <p class="muted" id="names-loading">Loading names…</p>
+    <button class="btn-wide" id="names-retry" hidden>Try again</button>
+  </main>
+
+  <!-- PIN -->
+  <main id="s-pin" hidden>
+    <div class="pin-who"><button class="btn-ghost btn-small" id="pin-back">‹ Back</button><b id="pin-name"></b></div>
+    <p class="muted" style="text-align:center;margin:0">Enter your 4-number PIN</p>
+    <div class="dots" id="dots"><i></i><i></i><i></i><i></i></div>
+    <p class="err" id="pin-err" style="text-align:center"></p>
+    <div class="pad" id="pad"></div>
+  </main>
+
+  <!-- No PIN yet -->
+  <main id="s-nopin" hidden>
+    <div class="pin-who"><button class="btn-ghost btn-small" data-back-names>‹ Back</button><b id="nopin-name"></b></div>
+    <section class="card">
+      <p style="margin:0;font-size:19px;font-weight:600">Your PIN hasn't been set up yet.</p>
+      <p style="margin:0" class="muted">Ask an admin to set your PIN, then come back here.</p>
+    </section>
+    <button class="btn-ghost" id="to-setup" hidden>First-time setup with the setup code</button>
+  </main>
+
+  <!-- First PIN with the setup code -->
+  <main id="s-setup" hidden>
+    <div class="pin-who"><button class="btn-ghost btn-small" data-back-names>‹ Back</button><b id="setup-name"></b></div>
+    <section class="card">
+      <h3>First-time setup</h3>
+      <div class="field"><label for="setup-code">Setup code</label><input type="password" id="setup-code" autocomplete="off"></div>
+      <div class="field"><label for="setup-pin">Choose a 4-number PIN</label><input class="pin-input" type="password" inputmode="numeric" maxlength="4" id="setup-pin" autocomplete="off"></div>
+      <div class="field"><label for="setup-pin2">Enter the PIN again</label><input class="pin-input" type="password" inputmode="numeric" maxlength="4" id="setup-pin2" autocomplete="off"></div>
+      <p class="err" id="setup-err"></p>
+      <button class="btn-primary btn-wide" id="setup-go">Set PIN and log in</button>
+    </section>
+  </main>
+
+  <!-- Home -->
+  <main id="s-home" hidden>
+    <h2 class="screen" id="home-hello"></h2>
+    <section class="card" id="today-card" hidden>
+      <h3>Today</h3>
+      <div class="status-big" id="today-status">Not clocked in</div>
+      <p class="muted" style="margin:0">Clock In, breaks and Clock Out are coming in the next step of the build.</p>
+    </section>
+    <section class="card" id="admin-card" hidden>
+      <h3>Admin</h3>
+      <button class="btn-wide" id="to-people">Manage people</button>
+    </section>
+    <button class="btn-ghost" id="logout">Log out</button>
+  </main>
+
+  <!-- Admin: people -->
+  <main id="s-people" hidden>
+    <div class="pin-who"><button class="btn-ghost btn-small" id="people-back">‹ Home</button><b>Manage people</b></div>
+    <p class="err" id="people-err"></p>
+    <button class="btn-primary btn-wide" id="add-person" style="margin-bottom:14px">+ Add person</button>
+    <div class="people" id="people"></div>
+  </main>
+
+  <!-- Admin: add / edit one person -->
+  <main id="s-person" hidden>
+    <div class="pin-who"><button class="btn-ghost btn-small" id="person-back">‹ People</button><b id="person-title"></b></div>
+    <section class="card">
+      <div class="field"><label for="p-first">First name</label><input type="text" id="p-first" autocomplete="off" autocapitalize="words"></div>
+      <div class="field"><label for="p-last">Last name</label><input type="text" id="p-last" autocomplete="off" autocapitalize="words"></div>
+      <div class="field"><span class="label">Role</span>
+        <div class="seg" id="p-role"><button type="button" data-v="worker">Worker</button><button type="button" data-v="admin">Admin</button></div></div>
+      <div class="field"><span class="label">Clocks in and out?</span>
+        <div class="seg" id="p-clocks"><button type="button" data-v="1">Yes</button><button type="button" data-v="0">No</button></div></div>
+      <div class="field"><label for="p-pin" id="p-pin-label">PIN (4 numbers)</label>
+        <input class="pin-input" type="tel" inputmode="numeric" maxlength="4" id="p-pin" autocomplete="off">
+        <span class="muted" id="p-pin-hint" style="font-size:14px"></span></div>
+      <p class="err" id="person-err"></p>
+      <button class="btn-primary btn-wide" id="person-save">Save</button>
+    </section>
+    <section class="card" id="person-active-card" hidden>
+      <h3>Login</h3>
+      <p class="muted" style="margin:0" id="person-active-text"></p>
+      <button id="person-active"></button>
+    </section>
+  </main>
+</div>
+
+<script>
+"use strict";
+// Talks to the NZCS Timesheet Worker. On this computer (testing) it uses the local Worker.
+const API = /^(localhost|127\.0\.0\.1)$/.test(location.hostname) ? "http://localhost:8787" : "https://nzcs-timesheet-api.royal-dawn-9e17.workers.dev";
+// Phone storage keys start "nzcst." (NZCS Forms and SFS Forms share this website's storage).
+const K_TOKEN = "nzcst.token", K_ME = "nzcst.me";
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const store = {
+  get(k){ try{ return localStorage.getItem(k); }catch(e){ return null; } },
+  set(k, v){ try{ localStorage.setItem(k, v); }catch(e){} },
+  del(k){ try{ localStorage.removeItem(k); }catch(e){} },
+};
+let me = null;
+try{ me = JSON.parse(store.get(K_ME) || "null"); }catch(e){}
+
+async function api(path, {method = "GET", body} = {}){
+  const headers = {};
+  const token = store.get(K_TOKEN);
+  if (token) headers.Authorization = "Bearer " + token;
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+  let res;
+  try{
+    res = await fetch(API + path, {method, headers, body: body === undefined ? undefined : JSON.stringify(body)});
+  }catch(e){
+    const err = new Error("No signal. Try again when you have reception."); err.offline = true; throw err;
+  }
+  let data = {};
+  try{ data = await res.json(); }catch(e){}
+  if (!res.ok){ const err = new Error(data.error || "Something went wrong. Try again."); err.status = res.status; throw err; }
+  return data;
+}
+
+/* ---------- Screens ---------- */
+const SCREENS = ["s-names", "s-pin", "s-nopin", "s-setup", "s-home", "s-people", "s-person"];
+function show(id){
+  for (const s of SCREENS) $(s).hidden = s !== id;
+  $("who-bar").hidden = !me;
+  if (me) $("who-role").textContent = me.role === "admin" ? "Admin" : "Worker";
+  window.scrollTo(0, 0);
+}
+function route(){
+  const h = location.hash.slice(1);
+  if (!me || !store.get(K_TOKEN)) return showNames();
+  if (h === "people" && me.role === "admin") return showPeople();
+  if (h.startsWith("person-") && me.role === "admin") return showPerson(h.slice(7));
+  showHome();
+}
+window.addEventListener("hashchange", route);
+
+/* ---------- Who are you? ---------- */
+let people = [], picked = null, setupOn = false;
+async function showNames(){
+  show("s-names");
+  $("names-err").textContent = ""; $("names-retry").hidden = true; $("names-loading").hidden = false;
+  try{
+    const data = await api("/api/people");
+    people = data.people; setupOn = data.setup;
+    $("names").innerHTML = people.map((p, i) => `<button data-i="${i}">${esc(p.first_name)}<span>${esc(p.last_name)}</span></button>`).join("");
+  }catch(e){
+    $("names").innerHTML = "";
+    $("names-err").textContent = e.offline ? "No signal. You need reception to log in. Once you're logged in, the app works without signal." : e.message;
+    $("names-retry").hidden = false;
+  }
+  $("names-loading").hidden = true;
+}
+$("names").addEventListener("click", e => {
+  const b = e.target.closest("button[data-i]"); if (!b) return;
+  picked = people[+b.dataset.i];
+  const name = picked.first_name + " " + picked.last_name;
+  if (!picked.has_pin){
+    $("nopin-name").textContent = name; $("to-setup").hidden = !setupOn; show("s-nopin"); return;
+  }
+  $("pin-name").textContent = name; pin = ""; drawDots(); $("pin-err").textContent = ""; show("s-pin");
+});
+$("names-retry").onclick = showNames;
+document.querySelectorAll("[data-back-names]").forEach(b => b.onclick = showNames);
+
+/* ---------- PIN pad ---------- */
+let pin = "", busy = false;
+$("pad").innerHTML = ["1","2","3","4","5","6","7","8","9","clear","0","del"].map(k =>
+  k === "clear" ? `<button class="alt" data-k="clear">Clear</button>` :
+  k === "del" ? `<button class="alt" data-k="del" aria-label="Delete">⌫</button>` : `<button data-k="${k}">${k}</button>`).join("");
+function drawDots(){ [...$("dots").children].forEach((d, i) => d.classList.toggle("on", i < pin.length)); }
+$("pad").addEventListener("click", e => {
+  const b = e.target.closest("button[data-k]"); if (!b || busy) return;
+  const k = b.dataset.k;
+  if (k === "clear") pin = "";
+  else if (k === "del") pin = pin.slice(0, -1);
+  else if (pin.length < 4) pin += k;
+  $("pin-err").textContent = "";
+  drawDots();
+  if (pin.length === 4) logIn();
+});
+document.addEventListener("keydown", e => {   // typing on a computer keyboard
+  if ($("s-pin").hidden || busy) return;
+  if (/^\d$/.test(e.key) && pin.length < 4){ pin += e.key; drawDots(); if (pin.length === 4) logIn(); }
+  else if (e.key === "Backspace"){ pin = pin.slice(0, -1); drawDots(); }
+});
+$("pin-back").onclick = showNames;
+async function logIn(){
+  busy = true; $("pin-err").textContent = "Checking…";
+  try{
+    const data = await api("/api/login", {method: "POST", body: {person_id: picked.id, pin}});
+    loggedIn(data);
+  }catch(e){
+    $("pin-err").textContent = e.message;
+    pin = ""; drawDots();
+  }
+  busy = false;
+}
+function loggedIn(data){
+  store.set(K_TOKEN, data.token);
+  me = data.me; store.set(K_ME, JSON.stringify(me));
+  history.replaceState(null, "", location.pathname + location.search);
+  showHome();
+}
+
+/* ---------- First-time setup ---------- */
+$("to-setup").onclick = () => {
+  $("setup-name").textContent = picked.first_name + " " + picked.last_name;
+  ["setup-code", "setup-pin", "setup-pin2"].forEach(id => $(id).value = "");
+  $("setup-err").textContent = ""; show("s-setup");
+};
+$("setup-go").onclick = async () => {
+  const code = $("setup-code").value.trim(), p1 = $("setup-pin").value, p2 = $("setup-pin2").value;
+  if (!code) return $("setup-err").textContent = "Enter the setup code.";
+  if (!/^\d{4}$/.test(p1)) return $("setup-err").textContent = "The PIN must be 4 numbers.";
+  if (p1 !== p2) return $("setup-err").textContent = "The two PINs don't match.";
+  $("setup-go").disabled = true; $("setup-err").textContent = "";
+  try{ loggedIn(await api("/api/setup-pin", {method: "POST", body: {person_id: picked.id, setup_code: code, pin: p1}})); }
+  catch(e){ $("setup-err").textContent = e.message; }
+  $("setup-go").disabled = false;
+};
+
+/* ---------- Home ---------- */
+function showHome(){
+  show("s-home");
+  $("home-hello").textContent = "Kia ora, " + me.first_name;
+  $("today-card").hidden = !me.clocks_in;
+  $("admin-card").hidden = me.role !== "admin";
+}
+$("to-people").onclick = () => location.hash = "people";
+$("logout").onclick = async () => {
+  if (!confirm("Log out? You'll need your PIN to log back in.")) return;
+  try{ await api("/api/logout", {method: "POST"}); }catch(e){}
+  logOutHere();
+};
+function logOutHere(){
+  store.del(K_TOKEN); store.del(K_ME); me = null;
+  history.replaceState(null, "", location.pathname + location.search);
+  showNames();
+}
+// Refresh my details (role may have changed). With no signal, carry on with the saved copy.
+async function refreshMe(){
+  if (!store.get(K_TOKEN)) return;
+  try{
+    const data = await api("/api/me");
+    me = data.me; store.set(K_ME, JSON.stringify(me)); route();
+  }catch(e){
+    if (e.status === 401) logOutHere();
+  }
+}
+
+/* ---------- Admin: people ---------- */
+let allPeople = [];
+async function loadPeople(){
+  const data = await api("/api/admin/people");
+  allPeople = data.people;
+}
+async function showPeople(){
+  show("s-people");
+  $("people-err").textContent = "";
+  try{ await loadPeople(); }
+  catch(e){ if (e.status === 401) return logOutHere(); $("people-err").textContent = e.message; }
+  $("people").innerHTML = allPeople.map(p => {
+    const tags = [];
+    if (p.role === "admin") tags.push(`<span class="pill">Admin</span>`);
+    if (!p.clocks_in) tags.push(`<span class="pill">No clock-in</span>`);
+    if (!p.has_pin) tags.push(`<span class="pill warn">No PIN yet</span>`);
+    if (!p.active) tags.push(`<span class="pill off">Turned off</span>`);
+    return `<div class="person${p.active ? "" : " inactive"}"><div class="who"><b>${esc(p.first_name)} ${esc(p.last_name)}</b><div class="tags">${tags.join("")}</div></div>
+      <button class="btn-small" data-edit="${esc(p.id)}">Edit</button></div>`;
+  }).join("");
+}
+$("people").addEventListener("click", e => { const b = e.target.closest("[data-edit]"); if (b) location.hash = "person-" + b.dataset.edit; });
+$("people-back").onclick = () => location.hash = "";
+$("add-person").onclick = () => location.hash = "person-new";
+
+let editing = null;
+function segSet(el, v){ [...el.children].forEach(b => b.setAttribute("aria-pressed", String(b.dataset.v === String(v)))); }
+function segGet(el){ const b = [...el.children].find(b => b.getAttribute("aria-pressed") === "true"); return b ? b.dataset.v : null; }
+["p-role", "p-clocks"].forEach(id => $(id).addEventListener("click", e => { const b = e.target.closest("button"); if (b) segSet($(id), b.dataset.v); }));
+
+async function showPerson(id){
+  if (!allPeople.length){ try{ await loadPeople(); }catch(e){} }
+  editing = id === "new" ? null : allPeople.find(p => p.id === id);
+  if (id !== "new" && !editing){ location.hash = "people"; return; }
+  show("s-person");
+  const p = editing || {first_name: "", last_name: "", role: "worker", clocks_in: true, has_pin: false};
+  $("person-title").textContent = editing ? p.first_name + " " + p.last_name : "Add person";
+  $("p-first").value = p.first_name; $("p-last").value = p.last_name;
+  segSet($("p-role"), p.role); segSet($("p-clocks"), p.clocks_in ? 1 : 0);
+  $("p-pin").value = "";
+  $("p-pin-label").textContent = editing && p.has_pin ? "New PIN (4 numbers)" : "PIN (4 numbers)";
+  $("p-pin-hint").textContent = editing && p.has_pin ? "Leave blank to keep their current PIN. A new PIN replaces the old one." : "Optional. You can set it later.";
+  $("person-err").textContent = "";
+  $("person-active-card").hidden = !editing;
+  if (editing){
+    const self = editing.id === me.id;
+    $("person-active-text").textContent = self ? "You can't turn off your own login."
+      : p.active ? "Turning off a login stops this person logging in and logs them out on every phone. Their records are kept."
+      : "This login is turned off. Turn it back on to let them log in again.";
+    $("person-active").textContent = p.active ? "Turn off login" : "Turn login back on";
+    $("person-active").className = p.active ? "btn-danger" : "btn-primary";
+    $("person-active").disabled = self;
+  }
+}
+$("person-back").onclick = () => location.hash = "people";
+$("person-save").onclick = async () => {
+  const body = {first_name: $("p-first").value, last_name: $("p-last").value, role: segGet($("p-role")), clocks_in: segGet($("p-clocks")) === "1"};
+  const newPin = $("p-pin").value.trim();
+  if (newPin && !/^\d{4}$/.test(newPin)) return $("person-err").textContent = "The PIN must be 4 numbers.";
+  $("person-save").disabled = true; $("person-err").textContent = "";
+  try{
+    if (editing){
+      await api("/api/admin/people/" + editing.id, {method: "PUT", body});
+      if (newPin) await api(`/api/admin/people/${editing.id}/pin`, {method: "POST", body: {pin: newPin}});
+      if (editing.id === me.id) await refreshMe();
+    }else{
+      await api("/api/admin/people", {method: "POST", body: {...body, pin: newPin}});
+    }
+    allPeople = [];
+    location.hash = "people";
+  }catch(e){
+    if (e.status === 401) logOutHere();
+    $("person-err").textContent = e.message;
+  }
+  $("person-save").disabled = false;
+};
+$("person-active").onclick = async () => {
+  const turningOff = editing.active;
+  if (turningOff && !confirm(`Turn off ${editing.first_name} ${editing.last_name}'s login?`)) return;
+  try{
+    await api("/api/admin/people/" + editing.id, {method: "PUT", body: {active: !turningOff}});
+    allPeople = []; location.hash = "people";
+  }catch(e){ $("person-err").textContent = e.message; }
+};
+
+/* ---------- Start ---------- */
+route();
+refreshMe();
+if ("serviceWorker" in navigator){
+  navigator.serviceWorker.register("sw.js").catch(() => {});
+  navigator.serviceWorker.ready.then(r => r.active && r.active.postMessage("recache")).catch(() => {});
+}
+</script>
+</body>
+</html>

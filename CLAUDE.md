@@ -8,7 +8,44 @@ This file records the brief and every decision the owner (Wade) makes, so work c
 
 ## Status
 
-- **24-11-2026:** design stage. Repo created, these notes written. No app code yet. Wade said "we're just designing for the moment"; build step 1 only when he says go.
+- **24-11-2026:** design stage. Repo created, these notes written.
+- **24-11-2026:** Wade said go on **step 1 (logins and roles)**. Built and tested locally (Worker + app). **Not deployed yet**: the Cloudflare database and Worker still need creating, and GitHub Pages needs turning on (see "Going live" below).
+
+## Where things are
+
+| What | Where |
+|---|---|
+| Live app | https://wade-14.github.io/nzcs-timesheet/ (once GitHub Pages is on) |
+| Preview (test changes here first) | https://wade-14.github.io/nzcs-timesheet/preview/ |
+| API (Cloudflare Worker) | https://nzcs-timesheet-api.royal-dawn-9e17.workers.dev (once deployed) |
+| Hosting | GitHub Pages from `main`, repo root |
+
+## Files
+
+- `index.html`: the whole app (one file, no build step). Screens: **Who are you?** (name buttons), **PIN pad**, **No PIN yet**, **First-time setup**, **Home** (Today card for people who clock in, Admin card for admins), **Manage people** list, **Add / edit person**. `API` is at the top of the script (localhost uses `http://localhost:8787`).
+- `sw.js`: service worker, same approach as the forms apps (network first, `cache: "no-cache"`, offline fallback). Cache name `nzcst-vN`: **bump it on every release** in both `sw.js` and `preview/sw.js`. It only deletes its own old `nzcst-` caches, and the app asks it to re-save missing files each time it opens ("recache"), because the NZCS Forms and SFS Forms service workers currently delete every cache on wade-14.github.io when they update.
+- `manifest.webmanifest`, `icon-*.png` (copied from NZCS Forms), `robots.txt`.
+- `preview/`: full copy of the app for testing. Same files.
+- `worker/`: Cloudflare Worker (`src/index.js`), D1 migrations (`migrations/`), `wrangler.toml`.
+
+## Release process (same as the forms apps)
+
+1. Edit files in `preview/`, test (see Testing), push, and let Wade try the preview if the change is big.
+2. Copy the preview files to the root, bump `CACHE` in both service workers, commit and push to `main`.
+3. Users get updates by fully closing and reopening the app.
+
+## Going live (first time, not done yet)
+
+1. Cloudflare: create D1 database `nzcs-timesheet` (Oceania), put its id in `worker/wrangler.toml`, apply migrations (`npx wrangler d1 migrations apply nzcs-timesheet --remote`), deploy the Worker. The Cloudflare token is in the session environment **"nzcs-chargeout"** (proxy-injected for api.cloudflare.com); this session must be on that environment to deploy. Deploy command: `cd worker && WRANGLER_SEND_METRICS=false CLOUDFLARE_API_TOKEN=proxy-injected CLOUDFLARE_ACCOUNT_ID=dc50d269d55490062b7b588156ed2fa1 npx wrangler deploy`.
+2. Wade adds the secret **`SETUP_CODE`** himself in the Cloudflare dashboard (Worker → Settings → Variables and Secrets), so it never passes through a chat or the repo.
+3. GitHub: Settings → Pages → Deploy from branch `main`, folder `/ (root)`.
+4. Wade logs in once with the setup code to set his own PIN, then sets everyone else's from Manage people.
+
+## Testing
+
+- `cd worker`, create `.dev.vars` (gitignored) with `SETUP_CODE=<test code>` and `EXTRA_ORIGINS=http://localhost:8765`, then `npx wrangler d1 migrations apply nzcs-timesheet --local` and `npx wrangler dev --local --port 8787`.
+- Serve the repo with `python3 -m http.server 8765` and drive it with Playwright (Chromium is preinstalled), phone-sized (iPhone 13 profile).
+- Step 1 was checked with 26 API tests (PIN rules, lockout, setup code, admin-only routes, deactivation, can't remove own admin) and a phone-sized browser run (login, wrong PIN, offline reopen, Sam's screen, add/edit/turn off person). No errors.
 
 ## Sister apps (same owner, same setup)
 
@@ -56,9 +93,22 @@ Every person has their **own login**. This is different from the forms apps, whi
 ## Logins (decided 24-11-2026)
 
 - Log in by **tapping your first and last name, then entering a PIN** (quick with gloves on, no email needed).
-- **PINs are created later.** Don't set or invent any yet.
+- **PINs are created later.** Don't set or invent any yet. Everyone starts with "No PIN yet".
 - Admins can add or deactivate workers and reset PINs.
 - PINs are stored hashed by the Worker, never in the repo.
+
+How step 1 works (built 24-11-2026; details chosen by Claude, tell Wade if any need changing):
+
+- **PIN = exactly 4 numbers.** Entered on a big on-screen number pad; logs in automatically at the 4th number.
+- **5 wrong PINs in a row locks that login for 15 minutes.** An admin setting a new PIN unlocks it straight away.
+- **Phones stay logged in for a year** (so the app works offline after the first login). Logging in needs signal; after that the app opens with no signal. "Log out" on the home screen.
+- **First PIN / getting the first admin in:** a person with no PIN sees "Your PIN hasn't been set up yet. Ask an admin". Below that, "First-time setup with the setup code" lets them set their own first PIN with the `SETUP_CODE` secret. It only works for someone who has no PIN yet. Wade uses it once for himself; after that admins set PINs in Manage people.
+- **Manage people (admins, including Sam):** list with tags Admin / No clock-in / No PIN yet / Turned off. Add a person (first name, last name, Worker/Admin, clocks in Yes/No, optional PIN). Edit the same fields, set a new PIN. **Turn off login** (they can't log in, are logged out on every phone, disappear from the name list; records kept) and turn back on. An admin can't turn off their own login or remove their own admin access.
+- Name list is sorted by first name, showing first name with surname underneath.
+- Home screen says "Kia ora, <first name>". People who clock in see a Today card (placeholder until step 2); admins see an Admin card. Sam (no clock-in) sees only the Admin card.
+- Database: `people` (names, role, clocks_in, active, PIN hash + salt, failed tries, lock time) and `sessions` (only a SHA-256 of each login token is stored). The 13 staff are added by `worker/migrations/0001_people.sql`. A daily cron removes expired logins.
+- Phone storage keys: `nzcst.token`, `nzcst.me`.
+- **For step 2:** turning off a login or a token expiring must never lose entries still waiting to sync on the phone. Keep the queue and ask them to log in again.
 
 ## Features (from the brief)
 
@@ -117,7 +167,7 @@ Every person has their **own login**. This is different from the forms apps, whi
 
 ## Planned database (D1, draft)
 
-- `people`: name, role (worker/admin), clocks_in (no for Sam), active, PIN hash.
+- `people` ✅ and `sessions` ✅ (built in step 1, see Logins).
 - `shifts`: person, NZ date, clock-in time, clock-out time, GPS for each (or "no location" flag), jobs text, adjusted flag.
 - `breaks`: shift, start, end (several per shift).
 - `adjustment_requests`: shift, which time, original value, requested value, reason, status, reviewer, reviewed at.
@@ -128,8 +178,8 @@ Every person has their **own login**. This is different from the forms apps, whi
 
 ## Build order (from the brief)
 
-1. Logins and roles (worker and admin). ← next, when Wade says go
-2. Clock in/out and breaks, with offline storage and sync.
+1. Logins and roles (worker and admin). ✅ built 24-11-2026, not deployed yet
+2. Clock in/out and breaks, with offline storage and sync. ← next
 3. Job recording.
 4. Admin dashboard (live status and daily hours).
 5. Adjustment requests and approvals.
