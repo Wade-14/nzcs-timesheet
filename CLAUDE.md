@@ -14,6 +14,7 @@ This file records the brief and every decision the owner (Wade) makes, so work c
 
 - **NZCS Forms** (repo `Wade-14/nzcs-chargeout`) and **SFS Forms** (repo `Wade-14/sfs-forms`). Both are plain HTML/JS PWAs on GitHub Pages with a Cloudflare Worker + D1 database, jsPDF, an IndexedDB Outbox for offline sending, Gmail SMTP email from nzcsforms@gmail.com, and OpenStreetMap maps. Read their `CLAUDE.md` for conventions. This app follows the same patterns where they fit.
 - Both forms apps and this app are served from `wade-14.github.io`, so they **share browser storage**. Use a unique prefix for everything stored on the phone (planned: `nzcst.` for localStorage keys, `nzcst-` for IndexedDB names and service worker caches).
+- **Cache Storage is shared too (24-11-2026):** this app's service worker must only delete its own old caches (`nzcst-vN` live, `nzcst-preview-vN` preview, matched by `CACHE` minus its version number), never "every cache except the current one". The forms apps did that and wiped each other's offline copies; fixed in both forms repos on 24-11-2026.
 
 ## Tech stack (decided 24-11-2026)
 
