@@ -108,6 +108,11 @@ input.pin-input{letter-spacing:.5em;font-variant-numeric:tabular-nums;max-width:
 .shifts{list-style:none;margin:0;padding:0;display:grid;gap:6px}
 .shifts li{border-left:4px solid var(--forest);padding:4px 0 4px 10px;font-variant-numeric:tabular-nums}
 .shifts li small{display:block;color:var(--muted);font-size:14px}
+.jobs-box{display:grid;gap:6px}
+.jobs-box label{font-size:18px}
+.jobs-box textarea{width:100%;font:inherit;font-size:18px;color:var(--ink);background:var(--sunken);border:2px solid var(--line);border-radius:10px;padding:12px;min-height:110px;resize:vertical}
+.jobs-box textarea.invalid{border-color:var(--danger);background:var(--danger-soft)}
+.jobs-hint{font-size:14px}
 .loc-info{background:var(--forest-soft);border-radius:var(--r);padding:14px;display:grid;gap:8px}
 .loc-info p{margin:0}
 .sync{border-radius:var(--r);padding:10px 14px;margin-bottom:14px;font-weight:600;background:var(--amber-soft);color:var(--amber);display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
@@ -181,6 +186,13 @@ input.pin-input{letter-spacing:.5em;font-variant-numeric:tabular-nums;max-width:
         <button class="btn-ghost btn-wide" id="loc-cancel">Cancel</button>
       </div>
       <div class="clock-btns" id="clock-btns"></div>
+      <div class="jobs-box" id="jobs-box" hidden>
+        <label for="jobs">What job did you work on today and where?</label>
+        <span class="muted" id="jobs-day" hidden></span>
+        <textarea id="jobs" maxlength="2000" rows="3" autocapitalize="sentences"></textarea>
+        <span class="muted jobs-hint" id="jobs-hint">You can list more than one job or place. You need to fill this in before you clock out.</span>
+        <p class="err" id="jobs-err"></p>
+      </div>
       <div class="totals" id="totals"></div>
       <ul class="shifts" id="shift-list"></ul>
       <p class="err" id="clock-err"></p>
@@ -366,7 +378,7 @@ function showHome(){
   $("home-hello").textContent = "Kia ora, " + me.first_name;
   $("today-card").hidden = !me.clocks_in;
   $("admin-card").hidden = me.role !== "admin";
-  if (me.clocks_in){ loadShifts().then(renderToday); sync(); }
+  if (me.clocks_in){ Promise.all([loadShifts(), loadDays()]).then(renderToday); sync(); }
   else $("sync").hidden = true;
 }
 $("to-people").onclick = () => location.hash = "people";
@@ -393,11 +405,14 @@ let db = null, shifts = [], syncing = false, syncProblem = "";
 function openDB(){
   if (db) return Promise.resolve(db);
   return new Promise((res, rej) => {
-    const r = indexedDB.open("nzcst-data", 1);
-    r.onupgradeneeded = () => {
+    const r = indexedDB.open("nzcst-data", 2);
+    r.onupgradeneeded = e => {
       const d = r.result;
-      d.createObjectStore("queue", {keyPath: "seq", autoIncrement: true});
-      d.createObjectStore("shifts", {keyPath: "id"}).createIndex("person", "person_id");
+      if (e.oldVersion < 1){
+        d.createObjectStore("queue", {keyPath: "seq", autoIncrement: true});
+        d.createObjectStore("shifts", {keyPath: "id"}).createIndex("person", "person_id");
+      }
+      if (e.oldVersion < 2) d.createObjectStore("days", {keyPath: "key"}).createIndex("person", "person_id");   // jobs text per person per day
     };
     r.onsuccess = () => { db = r.result; res(db); };
     r.onerror = () => rej(r.error);
@@ -423,7 +438,15 @@ async function patch(store, key, fn){
 }
 const myQueue = async () => (await tx("queue", "readonly", s => s.getAll())).filter(q => q.person_id === me.id);
 const queueAdd = item => tx("queue", "readwrite", s => s.add(item));
-const queueDel = seqs => tx("queue", "readwrite", s => { seqs.forEach(k => s.delete(k)); });
+// Removes the entries the server confirmed. Matched by entry id, so an entry changed while it was being sent stays queued.
+async function queueDone(eids){
+  const d = await openDB();
+  return new Promise((res, rej) => {
+    const t = d.transaction("queue", "readwrite"), r = t.objectStore("queue").openCursor();
+    r.onsuccess = () => { const c = r.result; if (!c) return; if (eids.has(c.value.eid)) c.delete(); c.continue(); };
+    t.oncomplete = () => res(); t.onerror = () => rej(t.error);
+  });
+}
 const shiftPut = sh => tx("shifts", "readwrite", s => s.put(sh));
 async function loadShifts(){
   shifts = (await tx("shifts", "readonly", s => s.index("person").getAll(me.id))).sort((a, b) => a.clock_in_at < b.clock_in_at ? -1 : 1);
@@ -432,6 +455,17 @@ async function replaceShifts(list){
   const mine = await tx("shifts", "readonly", s => s.index("person").getAllKeys(me.id));
   await tx("shifts", "readwrite", s => { mine.forEach(k => s.delete(k)); list.forEach(sh => s.put({...sh, person_id: me.id})); });
   await loadShifts();
+}
+let days = {};   // work_date -> jobs text, for the logged-in person
+const dayKey = date => me.id + "|" + date;
+async function loadDays(){
+  days = {};
+  for (const d of await tx("days", "readonly", s => s.index("person").getAll(me.id))) days[d.work_date] = d.jobs;
+}
+async function replaceDays(list){
+  const mine = await tx("days", "readonly", s => s.index("person").getAllKeys(me.id));
+  await tx("days", "readwrite", s => { mine.forEach(k => s.delete(k)); list.forEach(d => s.put({key: dayKey(d.work_date), person_id: me.id, work_date: d.work_date, jobs: d.jobs})); });
+  await loadDays();
 }
 
 // Dates and times, always in NZ time.
@@ -446,6 +480,11 @@ const uuid = () => crypto.randomUUID();
 function breakMs(sh, nowMs){ return sh.breaks.reduce((t, b) => t + ((b.end_at ? Date.parse(b.end_at) : nowMs) - Date.parse(b.start_at)), 0); }
 function workedMs(sh, nowMs){ return (sh.clock_out_at ? Date.parse(sh.clock_out_at) : nowMs) - Date.parse(sh.clock_in_at) - breakMs(sh, nowMs); }
 const openShift = () => shifts.find(s => !s.clock_out_at);
+function jobsDate(){
+  const open = openShift(), today = nzDate(Date.now());
+  if (open) return open.work_date;
+  return shifts.some(s => s.work_date === today) ? today : null;
+}
 const openBreak = sh => sh && sh.breaks.find(b => !b.end_at);
 
 function renderToday(){
@@ -468,6 +507,15 @@ function renderToday(){
     : brk ? `<button class="b-endbreak" data-act="break_end">End Break</button><button class="b-out second" data-act="clock_out">Clock Out</button>`
     : `<button class="b-break" data-act="break_start">Start Break</button><button class="b-out" data-act="clock_out">Clock Out</button>`;
   $("clock-btns").hidden = !$("loc-info").hidden;
+  // Jobs box: for the day of the open shift, or today once they've worked today
+  const jd = jobsDate();
+  $("jobs-box").hidden = !jd;
+  if (jd){
+    const ta = $("jobs");
+    if (ta.dataset.date !== jd || document.activeElement !== ta){ ta.value = days[jd] || ""; ta.dataset.date = jd; }
+    $("jobs-day").hidden = jd === today;
+    $("jobs-day").textContent = "For " + nzDayLabel(jd + "T12:00:00+13:00");
+  }
   // Today's totals and shifts (a shift past midnight stays on the day it started)
   const todays = shifts.filter(s => s.work_date === today || s === open);
   const worked = todays.reduce((t, s) => t + workedMs(s, nowMs), 0), breaks = todays.reduce((t, s) => t + breakMs(s, nowMs), 0);
@@ -529,6 +577,13 @@ async function doTap(act){
     ev = {type: "break_end", id: brk.id, at};
   }else if (act === "clock_out"){
     if (!open) return renderToday();
+    await flushJobs();
+    if (!(days[open.work_date] || "").trim()){
+      $("jobs").classList.add("invalid");
+      $("jobs-err").textContent = "Fill in what job you worked on today and where, then tap Clock Out.";
+      $("jobs").scrollIntoView({block: "center"}); $("jobs").focus();
+      return;
+    }
     sh = open; if (brk) brk.end_at = at;   // clocking out while on break ends the break
     sh.clock_out_at = at; sh.out_loc = {status: "pending"};
     ev = {type: "clock_out", id: sh.id, at, loc: {status: "pending"}}; locKey = "out_loc";
@@ -545,6 +600,30 @@ async function addLocation(seq, shiftId, locKey){
   await loadShifts(); renderToday();
   sync();
 }
+// Jobs text: saved on the phone as they type (shortly after they stop), then synced like a tap.
+// Only the latest text for a day is kept in the queue.
+let jobsTimer = null;
+async function saveJobs(date, text){
+  days[date] = text;
+  await tx("days", "readwrite", s => s.put({key: dayKey(date), person_id: me.id, work_date: date, jobs: text}));
+  const at = new Date().toISOString();
+  const waiting = (await myQueue()).find(q => q.type === "jobs" && q.work_date === date);
+  if (waiting) await patch("queue", waiting.seq, q => { q.eid = uuid(); q.text = text; q.at = at; q.made = Date.now(); });
+  else await queueAdd({person_id: me.id, eid: uuid(), made: Date.now(), type: "jobs", id: uuid(), work_date: date, text, at});
+  renderSync();
+}
+async function flushJobs(){
+  const ta = $("jobs");
+  clearTimeout(jobsTimer); jobsTimer = null;
+  const date = ta.dataset.date;
+  if (date && (days[date] || "") !== ta.value) await saveJobs(date, ta.value);
+}
+$("jobs").addEventListener("input", () => {
+  $("jobs").classList.remove("invalid"); $("jobs-err").textContent = "";
+  clearTimeout(jobsTimer);
+  jobsTimer = setTimeout(() => flushJobs().then(() => sync()), 800);
+});
+$("jobs").addEventListener("blur", () => flushJobs().then(() => sync()));
 $("clock-btns").addEventListener("click", e => {
   const b = e.target.closest("button[data-act]"); if (!b) return;
   if (b.dataset.act === "clock_in" && !store.get(K_LOCINFO)){   // explain location once, before the phone asks
@@ -570,13 +649,12 @@ async function sync(){
     });
     if (sending.length){
       const res = await api("/api/sync", {method: "POST", body: {events: sending}});
-      const done = new Set(res.done);
-      await queueDel(queue.filter(q => done.has(q.eid)).map(q => q.seq));
+      await queueDone(new Set(res.done));
       syncProblem = res.errors.length ? `${res.errors.length} ${res.errors.length === 1 ? "entry" : "entries"} couldn't be saved on the server (${res.errors[0].error}). They're kept on this phone. Tell an admin if this doesn't clear.` : "";
     }else syncProblem = "";
-    if (!(await myQueue()).length){
+    if (!(await myQueue()).length && !jobsTimer){
       const data = await api("/api/my/shifts");
-      await replaceShifts(data.shifts);
+      if (!(await myQueue()).length && !jobsTimer){ await replaceShifts(data.shifts); await replaceDays(data.days || []); }
     }
   }catch(e){
     if (e.status === 401){ syncProblem = ""; syncing = false; return logOutHere(); }

@@ -11,6 +11,7 @@ This file records the brief and every decision the owner (Wade) makes, so work c
 - **24-11-2026:** design stage. Repo created, these notes written.
 - **24-11-2026:** Wade said go on **step 1 (logins and roles)**. Built and tested locally (Worker + app). **Not deployed yet**: the Cloudflare database and Worker still need creating, and GitHub Pages needs turning on (see "Going live" below).
 - **24-11-2026:** Wade said carry on to **step 2 (clocking + offline sync)** before going live. Built and tested locally. Still not deployed.
+- **25-11-2026:** Wade said go on **step 3 (job recording)**. Built and tested locally. Still not deployed.
 
 ## Where things are
 
@@ -48,6 +49,8 @@ This file records the brief and every decision the owner (Wade) makes, so work c
 - Serve the repo with `python3 -m http.server 8765` and drive it with Playwright (Chromium is preinstalled), phone-sized (iPhone 13 profile).
 - Step 1 was checked with 26 API tests (PIN rules, lockout, setup code, admin-only routes, deactivation, can't remove own admin) and a phone-sized browser run (login, wrong PIN, offline reopen, Sam's screen, add/edit/turn off person). No errors.
 - Step 2 was checked with 14 API tests (night shift past midnight, re-sent taps not duplicated, two shifts in a day, open break closed at clock-out, location stored / denied flagged, can't touch someone else's shift, Sam can't clock in) and a phone-sized browser run: location explanation, clock in, then **with no signal** break, end break, double-tapped Clock Out (saved once), second clock-in, close and reopen the app, log-out warning; signal back → everything synced with GPS. Also a second person on the same phone with location denied (saved, flagged). No errors.
+- Step 3 was checked with 6 API tests (save, newest edit wins even if an older one arrives later, one row per day, private to the person, bad date rejected, 2000-character limit) and a phone-sized browser run: box hidden before clock-in, Wade's wording, Clock Out blocked when empty or only spaces, then **with no signal** typed and clocked out straight away, edited again (still one queued entry), reopened the app (text kept), second shift the same day (text carried over, Clock Out allowed); signal back → server had the latest text and both shifts. No errors.
+- The test scripts aren't in the repo. Note: a scripted Clock Out now needs the jobs box filled in first.
 
 ## Sister apps (same owner, same setup)
 
@@ -135,7 +138,7 @@ How step 2 works (built 24-11-2026):
 - Logging out with entries waiting warns "N entries haven't synced yet…"; they stay on the phone and sync when that person logs back in there. A different person logging in on the same phone never sends or sees them.
 - When nothing is waiting, the phone's copy is refreshed from the server (`GET /api/my/shifts`, last 7 days plus any open shift), so using two phones stays consistent.
 - Sam (clocks in: No) can't sync (403) and has no Today card.
-- **Not yet (step 3):** the required jobs box before Clock Out.
+- The jobs box (step 3) sits under the buttons; see "2. Job recording".
 
 ### 1a. Clock-in and clock-out location
 - GPS recorded automatically on Clock In and Clock Out only, with no extra step. Not tracked all day; no background location.
@@ -149,6 +152,16 @@ How step 2 works (built 24-11-2026):
 - Free-text box: what they worked on and where, that day. No dropdown.
 - **Required**: can't clock out or finish the day until it's filled in.
 - Can list several jobs/sites. Not linked to invoicing.
+- **Wording (Wade, 25-11-2026):** the box asks **"What job did you work on today and where?"**
+
+How step 3 works (built 25-11-2026; details chosen by Claude, tell Wade if any need changing):
+
+- **One answer per day** (not per shift), on the NZ day the shift started, so a night shift's jobs go on its start day. With two shifts in a day, the second shift shows the same text (they can add to it).
+- The box appears on the Today card under the buttons once they've clocked in (and stays for the rest of that day, still editable after clocking out). Hint under it: "You can list more than one job or place. You need to fill this in before you clock out." Plain box, no dropdown, up to 2000 characters.
+- **Clock Out with the box empty (or only spaces):** nothing is saved, the box turns red, the cursor goes into it, and it says "Fill in what job you worked on today and where, then tap Clock Out."
+- Saved on the phone as they type (shortly after they stop, or when they leave the box, or when they tap Clock Out), then synced like a tap. Only the latest text for a day is kept in the queue. On the server the newest edit (by phone time) always wins, even if an older edit arrives later.
+- An old day can't be edited from the home screen once the next day starts (changes later go through admins / adjustments).
+- Database: `day_jobs` (person, NZ date, text, phone time of last edit), `worker/migrations/0003_day_jobs.sql`. `GET /api/my/shifts` also returns `days`. Phone: IndexedDB `nzcst-data` version 2 adds a `days` store.
 
 ### 3. Time adjustments
 - Workers can't change recorded times directly. They submit an adjustment request: corrected time + reason.
@@ -186,7 +199,8 @@ How step 2 works (built 24-11-2026):
 ## Planned database (D1, draft)
 
 - `people` ✅ and `sessions` ✅ (built in step 1, see Logins).
-- `shifts` ✅ and `breaks` ✅ (built in step 2, `worker/migrations/0002_shifts.sql`). Jobs text and adjusted flag get added in steps 3 and 5.
+- `shifts` ✅ and `breaks` ✅ (built in step 2, `worker/migrations/0002_shifts.sql`). Adjusted flag gets added in step 5.
+- `day_jobs` ✅ (built in step 3: jobs text per person per day, not on `shifts`).
 - `adjustment_requests`: shift, which time, original value, requested value, reason, status, reviewer, reviewed at.
 - `leave_requests` + `leave_days`: type, date range; one row per day with hours (default 8). Status, reviewer.
 - `timesheet_submissions`: person, fortnight, sent at.
@@ -197,8 +211,8 @@ How step 2 works (built 24-11-2026):
 
 1. Logins and roles (worker and admin). ✅ built 24-11-2026, not deployed yet
 2. Clock in/out and breaks, with offline storage and sync. ✅ built 24-11-2026, not deployed yet
-3. Job recording. ← next
-4. Admin dashboard (live status and daily hours).
+3. Job recording. ✅ built 25-11-2026, not deployed yet
+4. Admin dashboard (live status and daily hours). ← next
 5. Adjustment requests and approvals.
 6. Leave requests and approvals.
 7. Fortnightly PDF and sending it.

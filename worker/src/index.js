@@ -1,4 +1,4 @@
-// NZCS Timesheet API: logins (name + 4-digit PIN), people, and clock in/out + breaks, stored in Cloudflare D1.
+// NZCS Timesheet API: logins (name + 4-digit PIN), people, clock in/out + breaks, and daily jobs, stored in Cloudflare D1.
 // Each person has their own login. PINs are stored only as salted PBKDF2 hashes.
 // SETUP_CODE (Cloudflare secret) lets someone set the first PIN for a person who has none yet.
 
@@ -186,6 +186,7 @@ async function adminSetPin(req, env, id) {
 /* ---------- Clocking (step 2) ---------- */
 
 const MAX_EVENTS = 200;
+const MAX_JOBS = 2000;             // characters in the jobs box
 const isId = v => /^[0-9a-f-]{32,36}$/.test(String(v ?? ""));
 const isTime = v => typeof v === "string" && v.length <= 40 && !Number.isNaN(Date.parse(v));
 const iso = v => new Date(v).toISOString();
@@ -245,6 +246,14 @@ async function applyEvent(env, person, ev) {
     ]);
     return;
   }
+  if (ev.type === "jobs") {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(ev.work_date ?? ""))) throw new Error("Jobs entry is missing its day.");
+    const text = String(ev.text ?? "").slice(0, MAX_JOBS);
+    await env.DB.prepare(`INSERT INTO day_jobs (person_id, work_date, jobs, jobs_at, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+      ON CONFLICT (person_id, work_date) DO UPDATE SET jobs = excluded.jobs, jobs_at = excluded.jobs_at, updated_at = excluded.updated_at
+      WHERE excluded.jobs_at >= day_jobs.jobs_at`).bind(person.id, ev.work_date, text, at, t).run();
+    return;
+  }
   throw new Error("Unknown kind of entry.");
 }
 
@@ -302,7 +311,10 @@ async function route(req, env) {
   if (path === "/api/my/shifts" && m === "GET") {
     const from = url.searchParams.get("from");
     const fromDate = /^\d{4}-\d{2}-\d{2}$/.test(from || "") ? from : nzDate(Date.now() - 7 * 86400_000);
-    return { shifts: await shiftsFor(env, me.person.id, fromDate), today: nzDate(Date.now()) };
+    const { results: days } = await env.DB.prepare(`SELECT work_date, jobs, jobs_at FROM day_jobs WHERE person_id = ?1
+      AND (work_date >= ?2 OR work_date IN (SELECT work_date FROM shifts WHERE person_id = ?1 AND clock_out_at IS NULL))`)
+      .bind(me.person.id, fromDate).all();
+    return { shifts: await shiftsFor(env, me.person.id, fromDate), days, today: nzDate(Date.now()) };
   }
 
   if (path.startsWith("/api/admin/")) {
