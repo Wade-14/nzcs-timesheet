@@ -22,6 +22,8 @@ This file records the brief and every decision the owner (Wade) makes, so work c
 - **25-11-2026:** **Staff guide** written (Claude Doc, see Files) with screenshots, for Wade to hand out. Wade starts demoing next week (possibly with one other person), then rolls out. Night-shift check (Wade's question): fixed the "forgot to clock out?" warning so it only shows after 16 hours (cache `nzcst-v6`).
 - **25-11-2026:** Wade asked for a **Share the app** button on the home screen and **phone alerts for admins** when a request comes in (it didn't notify before: admins only saw the "N to approve" badge). Both built, tested, migration 0009 applied live, `VAPID_PRIVATE_JWK` secret set by Claude (key made locally, never shown or committed), Worker redeployed, app released (cache `nzcst-v7`), staff guide updated.
 
+- **25-11-2026:** Storage settled: records kept 7 years, alert messages 7 days, monthly Cloudflare storage check scheduled. **Build finished. Now in trial (step 8):** Wade demos it from the week of 30-11-2026 (possibly with one other person), then rolls it out to everyone. Changes from here are fixes and tweaks from the trial.
+
 ## Where things are
 
 | What | Where |
@@ -292,14 +294,14 @@ How step 7 works (built 25-11-2026; details chosen by Claude, tell Wade if any n
 
 ## Build order (from the brief)
 
-1. Logins and roles (worker and admin). ✅ built 24-11-2026, not deployed yet
-2. Clock in/out and breaks, with offline storage and sync. ✅ built 24-11-2026, not deployed yet
-3. Job recording. ✅ built 25-11-2026, not deployed yet
-4. Admin dashboard (live status and daily hours). ✅ built 25-11-2026, not deployed yet (approvals list added in steps 5–6)
+1. Logins and roles (worker and admin). ✅ built 24-11-2026 and live (25-11-2026)
+2. Clock in/out and breaks, with offline storage and sync. ✅ built 24-11-2026 and live (25-11-2026)
+3. Job recording. ✅ built 25-11-2026 and live (25-11-2026)
+4. Admin dashboard (live status and daily hours). ✅ built 25-11-2026 and live (25-11-2026) (approvals list added in steps 5–6)
 5. Adjustment requests and approvals. ✅ built and live 25-11-2026
 6. Leave. ✅ built and live 25-11-2026 (records, no approval: Wade's change)
 7. Fortnightly PDF (download + email prompt). ✅ built and live 25-11-2026
-8. Test with a few staff, then roll out to everyone. ← next
+8. Test with a few staff, then roll out to everyone. ← now (trial from the week of 30-11-2026)
 
 ## Open questions (to ask when we reach that step)
 
