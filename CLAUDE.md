@@ -17,6 +17,7 @@ This file records the brief and every decision the owner (Wade) makes, so work c
 - **25-11-2026:** Wade said proceed with **step 5 (adjustments)** and answered the open question (below). Built, tested, migration 0005 applied to the live database, Worker redeployed, app released (cache `nzcst-v2`).
 - **25-11-2026:** Wade turned on GitHub Pages, added `SETUP_CODE` (as a Cloudflare secret) and set his PIN with it. **The app is live and in use.** Other people's PINs are set by admins in Manage people. Wade then decided: admins **can** approve their own requests, and the app keeps **following the phone's dark mode** (see below).
 - **25-11-2026:** Wade chose to change the **dashboard** before step 6: "Clocked in now" list + **View employees** → tap a name → that person's clocking history. Built, tested, migration 0006 applied live, Worker redeployed, app released (cache `nzcst-v3`). Step 6 (leave) is next.
+- **25-11-2026:** Wade said go on **step 6 (leave)**, then changed it mid-build: leave is a **record, not a request** (see "4. Leave"). Built, tested, migration 0007 applied live, Worker redeployed, app released (cache `nzcst-v4`). Step 7 (fortnightly PDF) is next.
 
 ## Where things are
 
@@ -59,6 +60,7 @@ This file records the brief and every decision the owner (Wade) makes, so work c
 - Step 4 was checked with 8 API tests (workers get 403, Sam can read it, Sam isn't listed as a worker, open break, shift left open from yesterday shows as open but in yesterday's hours, last sync time, never-synced phone) and a phone-sized browser run as Sam with a sample day: summary counts, on-site first, "forgot to clock out?" flag, hours/breaks/jobs per shift, missing jobs and location-off flags, 4 map pins + "No location recorded" list, Show on map, previous day / Back to today / can't go past today; a worker going to `#dash` stays on Home. Map tiles were mocked (no internet in the test browser). No errors.
 - Step 5 was checked with 25 API tests (save, re-send harmless, finish before start / break outside / overlapping / missing finish / no reason / someone else's shift rejected, missed day needs job, open shift start-only, workers can't list, oldest first, original kept, approve updates shift, can't decide twice, missed day becomes a shift on the right date, decline changes nothing, worker sees outcome + note + who, seen, dashboard shows original) and a two-phone browser run: Ruby fixes yesterday's finish + adds a break (form checks, live totals), then adds a missed day **with no signal** (Waiting to sync → synced); Sam sees "2 to approve", Now vs Asked for, approves one with a note and declines the other; dashboard shows Adjusted / was / approved by; Ruby gets both outcome boxes, OK clears them (stays cleared), her shift shows Adjusted with the new times. No errors.
 - Dashboard redesign was checked with 5 API tests (default fortnight start, workers can't change settings or read someone's history, Sam can, max range) and a phone-sized browser run as Sam: Clocked in now shows only the 3 people on site/on break, day view gone, today's map (4 pins), tapping a name opens their history, View employees lists the 12 who clock in, Nigel's fortnight (clocked in now, "not set yet" note, can't go forward, previous fortnight totals, Back to this fortnight), Settings saved → fortnights start on the new day. Fixed two bugs found while testing: the history map didn't re-zoom when switching person, and the previous person's details showed briefly while the next loaded. No errors.
+- Step 6 was checked with 15 API tests (record, re-send harmless, bad type / no days / 0 or 25 hours / same day twice rejected, Sam can't, not in approvals, worker's list, straight onto the fortnight history, can't remove someone else's, remove own → gone from history and list) plus the 25 step-5 tests again, and a two-phone browser run: Ruby records Thu 8h + Fri 4h sick leave **with no signal** (type required, 12h total, Waiting to sync → On your timesheet, days show Sick leave), records annual by mistake and removes it; Sam has nothing to approve and sees Thu/Fri sick leave and "Sick leave 12h" on Ruby's fortnight. Found and fixed: on a narrow phone the leave form (and the fix-a-shift time boxes) spilled off the right edge. No errors.
 - The test scripts aren't in the repo. Note: a scripted Clock Out now needs the jobs box filled in first.
 
 ## Sister apps (same owner, same setup)
@@ -197,7 +199,16 @@ How step 5 works (built 25-11-2026; details chosen by Claude, tell Wade if any n
 - Types: **Sick, Annual, Bereavement**.
 - One day or a date range. Each day defaults to **8 hours**, editable for part days.
 - A day can have both worked hours and leave (e.g. 4 h worked + 4 h sick).
-- Needs admin approval.
+- ~~Needs admin approval.~~ **Changed (Wade, 25-11-2026): leave is a record, not a request.** "I don't want this app to be how they request to take annual leave or use sick leave. They still need to text or ring their manager to ask. All I want is: they work Monday, Tuesday, Wednesday, but Thursday, Friday they're off on sick leave, so they can input 'I've been away on sick leave'. Their manager knows, but Sam might not, so it's already on their timesheet for the fortnight." So: **no approval step**, nothing goes to Waiting for approval, it goes straight onto their timesheet.
+
+How step 6 works (built 25-11-2026; details chosen by Claude, tell Wade if any need changing):
+
+- **My shifts** has **+ Record leave** (next to + Add a missed day) → `#leave`. The form starts with an amber note: "This doesn't ask for leave. Sort it out with your manager by phone or text first, then put it here so it's on your timesheet."
+- Type (big Sick / Annual / Bereavement buttons), **First day** and **Last day** (today by default; any date, past or future), then **Hours each day**: 8 unless changed (e.g. 4 for half a day); **weekends start at 0** in a range (can be changed); days left at 0 aren't recorded. Days + total hours shown. Optional note. **Save leave**. Up to 62 days at once.
+- Saved on the phone and synced like taps (queue type `leave`), so it works with no signal. **My leave** card on My shifts lists each entry ("Waiting to sync" / "On your timesheet") with **Remove** (asks first; type `leave_remove`; the entry is kept on the server marked removed, not deleted). The last-14-days list shows leave on each day ("Sick leave 8h").
+- **Admins:** each person's fortnight history shows leave on each day ("Sick leave 8h · <note>"), including days with no shifts and future days already recorded in that fortnight; **Fortnight totals** add hours for each leave type. Leave is not on the dashboard and not in Waiting for approval. Admins can't edit or remove someone's leave in the app (not asked for).
+- Sam (no clock-in) can't record leave. Admins who clock in can.
+- Database: `leave_entries` (person, type, first/last day, note, entered_at, removed_at) + `leave_days` (entry, date, hours) — `worker/migrations/0007_leave.sql`. API: sync types `leave` and `leave_remove`; `GET /api/my/leave` (last 60 days + future); `GET /api/admin/people/<id>/shifts` returns `leave` days. Phone storage adds `nzcst.leave.<person>`.
 
 ### 5. Admin dashboard
 - Live view: who is clocked in now and who is on a break.
@@ -216,7 +227,7 @@ How the dashboard works now (built 25-11-2026; details chosen by Claude, tell Wa
 - **Employee history** (`#emp-<id>`): name, "Clocked in now · Phone last synced …"; **one fortnight at a time** with ‹ › (not into the future) and "Back to this fortnight"; **Fortnight totals** (worked, breaks, days worked); **Days** newest first: each day worked with its total and each shift (times + hours, "(next day)", breaks, job text or "Jobs not filled in yet" / "No jobs entered", location flags, Adjusted / was / approved by), days with nothing as a thin "No shifts" line; then a **map of that fortnight's clock in/out pins**. `GET /api/admin/people/<id>/shifts?from=&to=` (max 62 days).
 - **Settings** (`#settings`): **Fortnight starts on** (any first day of a pay fortnight; fortnights repeat every 14 days before and after it). Until it's set, fortnights start on Mondays (from 16-11-2026) and the history page says so. Stored in the `settings` table (`worker/migrations/0006_settings.sql`); `GET /api/settings` (anyone logged in), `PUT /api/admin/settings` {fortnight_start}. The PDF (step 7) will use the same fortnights.
 - Last sync time is stored on `people.last_sync_at` (set when a phone's sync saves anything; `worker/migrations/0004_last_sync.sql`).
-- **Not yet:** leave requests in "Waiting for approval" and leave on the employee history (step 6).
+- Leave (step 6) shows on the employee history; it never goes to Waiting for approval (leave is a record, not a request).
 
 ### 6. Fortnightly timesheet PDF
 - One PDF per worker per fortnight: each day's clock in/out, breaks, total hours and jobs; leave by type and hours; approved adjustments marked as adjusted; fortnight totals (hours worked + hours of each leave type).
@@ -240,7 +251,7 @@ How the dashboard works now (built 25-11-2026; details chosen by Claude, tell Wa
 - `shifts` ✅ and `breaks` ✅ (built in step 2, `worker/migrations/0002_shifts.sql`). Adjusted flag gets added in step 5.
 - Jobs text ✅ is on `shifts` (`jobs`, `jobs_at`; step 3).
 - `adjustments` ✅ (step 5; covers both fixes and missed days). In-app notification uses `adjustments.seen_at`, so no separate `notifications` table so far.
-- `leave_requests` + `leave_days`: type, date range; one row per day with hours (default 8). Status, reviewer.
+- `leave_entries` ✅ + `leave_days` ✅ (step 6; records, no approval/status).
 - `timesheet_submissions`: person, fortnight, sent at.
 - `notifications`: in-app messages (e.g. "your adjustment was approved").
 - `settings` ✅ (fortnight start date; built with the dashboard redesign).
@@ -252,8 +263,8 @@ How the dashboard works now (built 25-11-2026; details chosen by Claude, tell Wa
 3. Job recording. ✅ built 25-11-2026, not deployed yet
 4. Admin dashboard (live status and daily hours). ✅ built 25-11-2026, not deployed yet (approvals list added in steps 5–6)
 5. Adjustment requests and approvals. ✅ built and live 25-11-2026
-6. Leave requests and approvals. ← next
-7. Fortnightly PDF and sending it.
+6. Leave. ✅ built and live 25-11-2026 (records, no approval: Wade's change)
+7. Fortnightly PDF and sending it. ← next
 8. Test with a few staff, then roll out to everyone.
 
 ## Open questions (to ask when we reach that step)

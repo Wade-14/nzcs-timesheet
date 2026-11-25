@@ -1,4 +1,4 @@
-// NZCS Timesheet API: logins (name + 4-digit PIN), people, clock in/out + breaks + jobs per shift, adjustment requests, stored in Cloudflare D1.
+// NZCS Timesheet API: logins (name + 4-digit PIN), people, clock in/out + breaks + jobs per shift, adjustment requests, leave records, stored in Cloudflare D1.
 // Each person has their own login. PINs are stored only as salted PBKDF2 hashes.
 // SETUP_CODE (Cloudflare secret) lets someone set the first PIN for a person who has none yet.
 
@@ -270,7 +270,65 @@ async function applyEvent(env, person, ev) {
       .bind(ev.id, person.id, kind, sh ? sh.id : null, nzDate(r.start), original && JSON.stringify(original), JSON.stringify(r), reason, at, t).run();
     return;
   }
+  if (ev.type === "leave") {
+    const existing = await env.DB.prepare("SELECT person_id FROM leave_entries WHERE id = ?1").bind(ev.id).first();
+    if (existing) { if (existing.person_id !== person.id) throw new Error("That leave belongs to someone else."); return; }
+    const type = LEAVE_TYPES.includes(ev.leave_type) ? ev.leave_type : null;
+    if (!type) throw new Error("Pick the type of leave.");
+    const days = (Array.isArray(ev.days) ? ev.days : []).slice(0, MAX_LEAVE_DAYS + 1).map(d => {
+      if (!d || !isYmd(d.date)) throw new Error("A leave day is missing its date.");
+      const h = Math.round(Number(d.hours) * 100) / 100;
+      if (!(h > 0 && h <= 24)) throw new Error("Leave hours must be more than 0 and no more than 24 a day.");
+      return { date: d.date, hours: h };
+    }).sort((a, b) => a.date < b.date ? -1 : 1);
+    if (!days.length) throw new Error("The leave has no days with hours.");
+    if (days.length > MAX_LEAVE_DAYS) throw new Error(`Leave can be recorded for up to ${MAX_LEAVE_DAYS} days at a time.`);
+    for (let i = 1; i < days.length; i++) if (days[i].date === days[i - 1].date) throw new Error("The same day is in the leave twice.");
+    const note = String(ev.note ?? "").trim().slice(0, MAX_JOBS) || null;
+    await env.DB.batch([
+      env.DB.prepare(`INSERT INTO leave_entries (id, person_id, leave_type, start_date, end_date, note, entered_at, created_at)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`).bind(ev.id, person.id, type, days[0].date, days[days.length - 1].date, note, at, t),
+      ...days.map(d => env.DB.prepare("INSERT INTO leave_days (entry_id, work_date, hours) VALUES (?1, ?2, ?3)").bind(ev.id, d.date, d.hours)),
+    ]);
+    return;
+  }
+  if (ev.type === "leave_remove") {   // a person removing leave they recorded by mistake (kept, marked removed)
+    const l = await env.DB.prepare("SELECT person_id FROM leave_entries WHERE id = ?1").bind(String(ev.id)).first();
+    if (!l) throw new Error("That leave hasn't reached the server.");
+    if (l.person_id !== person.id) throw new Error("That leave belongs to someone else.");
+    await env.DB.prepare("UPDATE leave_entries SET removed_at = ?1 WHERE id = ?2 AND removed_at IS NULL").bind(t, ev.id).run();
+    return;
+  }
   throw new Error("Unknown kind of entry.");
+}
+
+/* ---------- Leave (step 6) ---------- */
+const LEAVE_TYPES = ["sick", "annual", "bereavement"];
+const MAX_LEAVE_DAYS = 62;
+const isYmd = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v ?? "")) && !Number.isNaN(Date.parse(v + "T00:00:00Z"));
+
+// Leave entries (not removed) for one person, with their days.
+async function listLeave(env, personId, fromDate) {
+  const { results } = await env.DB.prepare(
+    "SELECT * FROM leave_entries WHERE person_id = ?1 AND removed_at IS NULL AND end_date >= ?2 ORDER BY start_date DESC LIMIT 100").bind(personId, fromDate).all();
+  if (!results.length) return [];
+  const ids = results.map(l => l.id), days = [];
+  for (let i = 0; i < ids.length; i += 90) {
+    const chunk = ids.slice(i, i + 90);
+    const { results: d } = await env.DB.prepare(
+      `SELECT * FROM leave_days WHERE entry_id IN (${chunk.map((_, k) => `?${k + 1}`).join(",")}) ORDER BY work_date`).bind(...chunk).all();
+    days.push(...d);
+  }
+  return results.map(l => ({ id: l.id, leave_type: l.leave_type, start_date: l.start_date, end_date: l.end_date, note: l.note, entered_at: l.entered_at,
+    days: days.filter(d => d.entry_id === l.id).map(d => ({ date: d.work_date, hours: d.hours })) }));
+}
+
+// Leave days for one person between two dates (removed entries left out).
+async function leaveFor(env, personId, from, to) {
+  const { results } = await env.DB.prepare(
+    `SELECT d.work_date, d.hours, l.leave_type, l.note, l.id AS entry_id FROM leave_days d JOIN leave_entries l ON l.id = d.entry_id
+      WHERE l.person_id = ?1 AND l.removed_at IS NULL AND d.work_date >= ?2 AND d.work_date <= ?3 ORDER BY d.work_date`).bind(personId, from, to).all();
+  return results;
 }
 
 /* ---------- Adjustment requests (step 5) ---------- */
@@ -429,7 +487,7 @@ async function adminPersonShifts(env, id, from, to) {
   const shifts = await withBreaks(env, results);
   await attachAdjustments(env, shifts);
   const open = await env.DB.prepare("SELECT id FROM shifts WHERE person_id = ?1 AND clock_out_at IS NULL LIMIT 1").bind(p.id).first();
-  return { person: { ...publicPerson(p), last_sync: p.last_sync_at || null, clocked_in: !!open }, from, to, shifts };
+  return { person: { ...publicPerson(p), last_sync: p.last_sync_at || null, clocked_in: !!open }, from, to, shifts, leave: await leaveFor(env, p.id, from, to) };
 }
 
 // Admin dashboard: everyone who clocks in, their shifts on one NZ day, anything still open, and when their phone last synced.
@@ -482,8 +540,11 @@ async function route(req, env) {
   }
 
   if (path === "/api/settings" && m === "GET") return getSettings(env);
-  if (path === "/api/my/requests" && m === "GET")
-    return { requests: await listRequests(env, "a.person_id = ?1 AND a.created_at >= ?2", [me.person.id, new Date(Date.now() - 60 * 86400_000).toISOString()]) };
+  if (path === "/api/my/requests" && m === "GET") {
+    const since = new Date(Date.now() - 60 * 86400_000).toISOString();
+    return { requests: await listRequests(env, "a.person_id = ?1 AND a.created_at >= ?2", [me.person.id, since]) };
+  }
+  if (path === "/api/my/leave" && m === "GET") return { leave: await listLeave(env, me.person.id, nzDate(Date.now() - 60 * 86400_000)) };
   let mr = /^\/api\/my\/requests\/([0-9a-f-]{32,36})\/seen$/.exec(path);
   if (mr && m === "POST") {
     await env.DB.prepare("UPDATE adjustments SET seen_at = ?1 WHERE id = ?2 AND person_id = ?3 AND seen_at IS NULL").bind(now(), mr[1], me.person.id).run();

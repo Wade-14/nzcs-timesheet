@@ -148,13 +148,26 @@ input.pin-input{letter-spacing:.5em;font-variant-numeric:tabular-nums;max-width:
 .my-shift .job-text{color:var(--ink);white-space:pre-line;font-size:15px}
 .my-shift button{justify-self:start}
 .tag-adj{display:inline-block;font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;background:var(--amber-soft);color:var(--amber);border-radius:999px;padding:2px 8px;vertical-align:2px}
-.row2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.row2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px}
+.row2>*,.field{min-width:0}
+input[type=date],input[type=time]{min-width:0;max-width:100%}
 input[type=time],input[type=date],textarea.plain{width:100%;font:inherit;font-size:18px;color:var(--ink);background:var(--sunken);border:2px solid var(--line);border-radius:10px;padding:10px 12px;min-height:54px}
 #s-adjust textarea{width:100%;font:inherit;font-size:17px;color:var(--ink);background:var(--sunken);border:2px solid var(--line);border-radius:10px;padding:12px;resize:vertical}
 .brk-list{display:grid;gap:8px}
 .brk{display:grid;grid-template-columns:1fr auto 1fr 52px;gap:8px;align-items:center}
 .brk span{color:var(--muted)}
 .brk button{min-height:54px;padding:0;font-size:20px}
+.two-btns{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px}
+.lv-types{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.lv-types button{min-height:60px;font-size:16px;padding:6px 4px;background:var(--sunken);min-width:0;overflow-wrap:anywhere}
+.lv-types button[aria-pressed="true"]{background:var(--forest);border-color:var(--forest);color:var(--forest-ink)}
+.lv-days{display:grid;gap:6px}
+.lv-day{display:grid;grid-template-columns:minmax(0,1fr) 100px;gap:10px;align-items:center}
+.lv-day input{width:100%;font:inherit;font-size:18px;color:var(--ink);background:var(--sunken);border:2px solid var(--line);border-radius:10px;padding:8px 10px;min-height:50px;text-align:right}
+.lv-day span small{color:var(--muted)}
+#s-leave textarea{width:100%;font:inherit;font-size:17px;color:var(--ink);background:var(--sunken);border:2px solid var(--line);border-radius:10px;padding:12px;resize:vertical}
+.leave-line{border-left:4px solid var(--hivis);padding:2px 0 2px 10px;font-weight:600}
+.leave-line small{font-weight:400;color:var(--muted)}
 .appr-btns{display:flex;gap:10px;flex-wrap:wrap}
 .appr-btns button{flex:1 1 120px}
 .appr-note{width:100%;font:inherit;font-size:16px;color:var(--ink);background:var(--sunken);border:2px solid var(--line);border-radius:10px;padding:10px;min-height:48px}
@@ -292,7 +305,14 @@ button.now-row{width:100%;text-align:left;border:0;font-weight:400;min-height:0;
   <main id="s-mine" hidden>
     <div class="pin-who"><button class="btn-ghost btn-small" id="mine-back">‹ Home</button><b>My shifts</b></div>
     <p class="ok-note" id="mine-msg" hidden></p>
-    <button class="btn-primary btn-wide" id="add-missed" style="margin-bottom:14px">+ Add a missed day</button>
+    <div class="two-btns">
+      <button class="btn-primary" id="add-leave">+ Record leave</button>
+      <button class="btn-primary" id="add-missed">+ Add a missed day</button>
+    </div>
+    <section class="card" id="myleave-card" hidden>
+      <h3>My leave</h3>
+      <div class="req-list" id="my-leave"></div>
+    </section>
     <section class="card" id="req-card" hidden>
       <h3>My requests</h3>
       <div class="req-list" id="my-reqs"></div>
@@ -324,6 +344,27 @@ button.now-row{width:100%;text-align:left;border:0;font-weight:400;min-height:0;
       <div class="totals" id="adj-sum"></div>
       <p class="err" id="adj-err"></p>
       <button class="btn-primary btn-wide" id="adj-send">Send request</button>
+    </section>
+  </main>
+
+  <!-- Record leave -->
+  <main id="s-leave" hidden>
+    <div class="pin-who"><button class="btn-ghost btn-small" id="lv-back">‹ My shifts</button><b>Record leave</b></div>
+    <section class="card">
+      <p class="note" style="margin:0">This doesn't ask for leave. Sort it out with your manager by phone or text first, then put it here so it's on your timesheet.</p>
+      <div class="field"><span class="label">Type of leave</span>
+        <div class="lv-types" id="lv-type"><button type="button" data-v="sick">Sick</button><button type="button" data-v="annual">Annual</button><button type="button" data-v="bereavement">Bereavement</button></div></div>
+      <div class="row2">
+        <div class="field"><label for="lv-from">First day</label><input type="date" id="lv-from"></div>
+        <div class="field"><label for="lv-to">Last day</label><input type="date" id="lv-to"></div>
+      </div>
+      <div class="field" id="lv-days-f" hidden><span class="label">Hours each day</span>
+        <span class="muted small">8 hours unless you change it, e.g. 4 for half a day. Weekends start at 0.</span>
+        <div class="lv-days" id="lv-days"></div></div>
+      <div class="totals" id="lv-sum"></div>
+      <div class="field"><label for="lv-note">Note (optional)</label><textarea id="lv-note" maxlength="2000" rows="2"></textarea></div>
+      <p class="err" id="lv-err"></p>
+      <button class="btn-primary btn-wide" id="lv-send">Save leave</button>
     </section>
   </main>
 
@@ -465,7 +506,7 @@ async function api(path, {method = "GET", body} = {}){
 }
 
 /* ---------- Screens ---------- */
-const SCREENS = ["s-names", "s-pin", "s-nopin", "s-setup", "s-home", "s-mine", "s-adjust", "s-dash", "s-staff", "s-emp", "s-settings", "s-people", "s-person"];
+const SCREENS = ["s-names", "s-pin", "s-nopin", "s-setup", "s-home", "s-mine", "s-adjust", "s-leave", "s-dash", "s-staff", "s-emp", "s-settings", "s-people", "s-person"];
 function show(id){
   for (const s of SCREENS) $(s).hidden = s !== id;
   $("who-bar").hidden = !me;
@@ -482,6 +523,7 @@ function route(){
   if (h === "settings" && me.role === "admin") return showSettings();
   if (h === "mine" && me.clocks_in) return showMine();
   if (h === "missed" && me.clocks_in) return showAdjust(null);
+  if (h === "leave" && me.clocks_in) return showLeave();
   if (h.startsWith("fix-") && me.clocks_in) return showAdjust(h.slice(4));
   if (h.startsWith("person-") && me.role === "admin") return showPerson(h.slice(7));
   showHome();
@@ -856,6 +898,7 @@ async function sync(){
       if (!(await myQueue()).length && !jobsTimer) await replaceShifts(data.shifts);
       const rq = await api("/api/my/requests");
       myReqs = rq.requests; store.set(K_REQS + me.id, JSON.stringify(myReqs));
+      myLeave = (await api("/api/my/leave")).leave; store.set("nzcst.leave." + me.id, JSON.stringify(myLeave));
       renderNotices();
       if (!$("s-mine").hidden) renderMine();
     }
@@ -940,7 +983,7 @@ $("notices").addEventListener("click", async e => {
 async function showMine(msg){
   show("s-mine");
   $("mine-msg").hidden = !msg; $("mine-msg").textContent = msg || "";
-  await loadShifts(); loadMyReqs();
+  await loadShifts(); loadMyReqs(); loadMyLeave();
   renderMine();
   sync();
 }
@@ -950,6 +993,11 @@ async function renderMine(){
   const queued = await queuedReqs(), pend = await pendingShiftIds();
   const reqRows = queued.map(q => ({id: q.id, kind: q.kind, work_date: nzDate(q.request.start), requested: q.request, reason: q.reason, status: "waiting"}))
     .concat(myReqs.filter(r => !queued.some(q => q.id === r.id)));
+  const lvList = await leaveEntries();
+  $("myleave-card").hidden = !lvList.length;
+  $("my-leave").innerHTML = lvList.map(l => `<div class="req"><div class="req-head"><b>${LEAVE_NAME[l.leave_type]} · ${leaveRange(l)}</b><span class="st ${l.waiting ? "st-warn" : "st-on"}">${l.waiting ? "Waiting to sync" : "On your timesheet"}</span></div>
+    <p>${leaveSummary(l)}</p>${l.note ? `<p class="muted small why">Note: ${esc(l.note)}</p>` : ""}
+    <button class="btn-small btn-danger" data-rmleave="${esc(l.id)}" style="justify-self:start">Remove</button></div>`).join("");
   $("req-card").hidden = !reqRows.length;
   const ST = {waiting: ["st-warn", "Waiting to sync"], pending: ["st-none", "Waiting for approval"], approved: ["st-on", "Approved"], declined: ["st-break", "Declined"]};
   $("my-reqs").innerHTML = reqRows.map(r => `<div class="req"><div class="req-head"><b>${r.kind === "day" ? "Missed day" : "Fix a shift"} · ${dayLabel(r.work_date)}</b><span class="st ${ST[r.status][0]}">${ST[r.status][1]}</span></div>
@@ -957,13 +1005,15 @@ async function renderMine(){
     <p class="muted small why">Reason: ${esc(r.reason)}</p>
     ${r.review_note ? `<p class="small">Note from ${esc(r.reviewed_by || "admin")}: ${esc(r.review_note)}</p>` : ""}</div>`).join("");
   // Shifts by day, newest first
-  const byDay = {};
+  const byDay = {}, lvByDay = {}, today = nzDate(Date.now()), from14 = addDaysNZ(today, -14);
   for (const sh of shifts) (byDay[sh.work_date] = byDay[sh.work_date] || []).push(sh);
-  const dates = Object.keys(byDay).sort().reverse();
+  for (const l of lvList) for (const d of l.days) if (d.date >= from14 && d.date <= today) (lvByDay[d.date] = lvByDay[d.date] || []).push({...d, l});
+  const dates = [...new Set(Object.keys(byDay).concat(Object.keys(lvByDay)))].sort().reverse();
   $("my-days").innerHTML = dates.map(d => {
-    const list = byDay[d], nowMs = Date.now();
+    const list = byDay[d] || [], nowMs = Date.now();
     const tot = list.reduce((t, s) => t + workedMs(s, nowMs), 0);
-    return `<div class="day-block"><b>${dayLabel(d)} · ${hm(tot)}</b>${list.map(sh => `<div class="my-shift">
+    const lv = (lvByDay[d] || []).map(x => `<div class="leave-line">${LEAVE_NAME[x.l.leave_type]} ${fmtH(x.hours)}${x.l.waiting ? " <small>· waiting to sync</small>" : ""}</div>`).join("");
+    return `<div class="day-block"><b>${dayLabel(d)}${list.length ? " · " + hm(tot) : ""}</b>${lv}${list.map(sh => `<div class="my-shift">
       <b>${nzTime(sh.clock_in_at)} – ${sh.clock_out_at ? nzTime(sh.clock_out_at) : "still clocked in"} ${sh.adjusted ? `<span class="tag-adj">Adjusted</span>` : ""}</b>
       <small>${sh.breaks.length ? "Breaks: " + sh.breaks.map(b => `${nzTime(b.start_at)}–${b.end_at ? nzTime(b.end_at) : "now"}`).join(", ") : "No breaks"}</small>
       ${sh.jobs && sh.jobs.trim() ? `<span class="job-text">${esc(sh.jobs)}</span>` : ""}
@@ -971,7 +1021,89 @@ async function renderMine(){
     </div>`).join("")}</div>`;
   }).join("") || `<p class="muted" style="margin:0">No shifts in the last 14 days.</p>`;
 }
+$("my-leave").addEventListener("click", async e => {
+  const b = e.target.closest("[data-rmleave]"); if (!b) return;
+  if (!confirm("Remove this leave from your timesheet?")) return;
+  const id = b.dataset.rmleave, q = await myQueue();
+  const waiting = q.find(x => x.type === "leave" && x.id === id);
+  if (waiting) await queueDone(new Set([waiting.eid]));   // never sent: just drop it
+  else await queueAdd({person_id: me.id, eid: uuid(), made: Date.now(), type: "leave_remove", id, at: new Date().toISOString()});
+  renderMine(); renderSync(); sync();
+});
 $("my-days").addEventListener("click", e => { const b = e.target.closest("[data-fix]"); if (b) location.hash = "fix-" + b.dataset.fix; });
+
+/* ---------- Leave (step 6) ----------
+   A RECORD, not a request (Wade, 25-11-2026): staff arrange leave with their manager by phone/text, then record it
+   here so it's on their timesheet for payroll. No approval. One entry covers a day or a date range; each day has
+   its own hours (8 unless changed; weekends start at 0). Saved on the phone and synced like taps (type "leave");
+   they can remove their own entry (type "leave_remove"). */
+const LEAVE_NAME = {sick: "Sick leave", annual: "Annual leave", bereavement: "Bereavement leave"};
+const fmtH = h => (Math.round(h * 100) / 100) + "h";
+const leaveRange = r => r.start_date === r.end_date ? dayLabel(r.start_date) : dayLabel(r.start_date) + " – " + dayLabel(r.end_date);
+const leaveHours = r => r.days.reduce((t, d) => t + d.hours, 0);
+const leaveSummary = r => `${r.days.length} day${r.days.length === 1 ? "" : "s"} · ${fmtH(leaveHours(r))}` + (r.days.length > 1 || r.days[0].hours !== 8 ? ` <span class="muted small">(${r.days.map(d => dayLabel(d.date).slice(0, 9) + " " + fmtH(d.hours)).join(", ")})</span>` : "");
+const isWeekend = ymd => [0, 6].includes(new Date(ymd + "T12:00:00Z").getUTCDay());
+let lvHours = {};   // hours typed per date, kept while they change the range
+let myLeave = [];
+function loadMyLeave(){ try{ myLeave = JSON.parse(store.get("nzcst.leave." + me.id) || "[]"); }catch(e){ myLeave = []; } }
+// Leave as the phone sees it: synced entries, plus ones waiting to sync, minus ones removed but not synced yet.
+async function leaveEntries(){
+  const q = await myQueue();
+  const removing = new Set(q.filter(x => x.type === "leave_remove").map(x => x.id));
+  const waiting = q.filter(x => x.type === "leave").map(x => ({id: x.id, leave_type: x.leave_type, start_date: x.days[0].date, end_date: x.days[x.days.length - 1].date, days: x.days, note: x.note, waiting: true}));
+  return waiting.concat(myLeave.filter(l => !waiting.some(w => w.id === l.id))).filter(l => !removing.has(l.id));
+}
+
+function showLeave(){
+  show("s-leave");
+  lvHours = {};
+  segSet($("lv-type"), "");
+  const t = nzDate(Date.now());
+  $("lv-from").value = t; $("lv-to").value = t; $("lv-to").min = t; $("lv-note").value = ""; $("lv-err").textContent = "";
+  renderLeaveDays();
+}
+$("lv-back").onclick = () => location.hash = "mine";
+$("add-leave").onclick = () => location.hash = "leave";
+$("lv-type").addEventListener("click", e => { const b = e.target.closest("button"); if (b){ segSet($("lv-type"), b.dataset.v); $("lv-err").textContent = ""; } });
+$("lv-from").oninput = () => { if (!$("lv-to").value || $("lv-to").value < $("lv-from").value) $("lv-to").value = $("lv-from").value; $("lv-to").min = $("lv-from").value; renderLeaveDays(); };
+$("lv-to").oninput = renderLeaveDays;
+function leaveDates(){
+  const f = $("lv-from").value, t = $("lv-to").value || f;
+  if (!f || t < f) return [];
+  const out = []; for (let d = f; d <= t && out.length <= 62; d = addDaysNZ(d, 1)) out.push(d);
+  return out;
+}
+function renderLeaveDays(){
+  const dates = leaveDates();
+  $("lv-days-f").hidden = !dates.length;
+  $("lv-days").innerHTML = dates.map(d => {
+    const h = d in lvHours ? lvHours[d] : (isWeekend(d) && dates.length > 1 ? 0 : 8);
+    return `<label class="lv-day"><span>${dayLabel(d)}${isWeekend(d) ? " <small>Weekend</small>" : ""}</span><input type="number" inputmode="decimal" min="0" max="24" step="0.25" data-d="${d}" value="${h}"></label>`;
+  }).join("");
+  leaveSum();
+}
+$("lv-days").addEventListener("input", e => { const i = e.target.closest("input[data-d]"); if (i){ lvHours[i.dataset.d] = i.value === "" ? 0 : +i.value; leaveSum(); } });
+function readLeaveDays(){
+  return [...$("lv-days").querySelectorAll("input[data-d]")].map(i => ({date: i.dataset.d, hours: Math.round((+i.value || 0) * 100) / 100})).filter(d => d.hours > 0);
+}
+function leaveSum(){
+  const days = readLeaveDays();
+  $("lv-sum").innerHTML = days.length ? `<div><span>Days</span><b>${days.length}</b></div><div><span>Total hours</span><b>${fmtH(days.reduce((t, d) => t + d.hours, 0))}</b></div>` : "";
+}
+$("lv-send").onclick = async () => {
+  const type = segGet($("lv-type")), dates = leaveDates(), days = readLeaveDays();
+  const err = !type ? "Pick the type of leave." : !$("lv-from").value ? "Pick the first day." : !dates.length ? "The last day can't be before the first day."
+    : dates.length > 62 ? "Leave can be recorded for up to 62 days at a time." : [...$("lv-days").querySelectorAll("input")].some(i => +i.value < 0 || +i.value > 24) ? "Hours must be between 0 and 24 for each day."
+    : !days.length ? "Put hours on at least one day." : "";
+  if (err) return $("lv-err").textContent = err;
+  $("lv-send").disabled = true;
+  try{
+    await queueAdd({person_id: me.id, eid: uuid(), made: Date.now(), type: "leave", id: uuid(), leave_type: type, days, note: $("lv-note").value.trim(), at: new Date().toISOString()});
+    history.replaceState(null, "", "#mine");
+    await showMine("Leave saved. It's on your timesheet once your phone has signal.");
+  }catch(e){ $("lv-err").textContent = "Couldn't save the leave on this phone. (" + e.message + ")"; }
+  $("lv-send").disabled = false;
+};
 
 // The form. Fixing a shift starts with its current times; a missed day starts empty.
 let adjShift = null;
@@ -1273,14 +1405,19 @@ function renderEmp(){
   $("emp-status").textContent = (p.clocked_in ? "Clocked in now · " : "") + syncedText(p) + (p.active ? "" : " · Login turned off");
   const worked = d.shifts.reduce((t, s) => t + workedMs(s, nowMs), 0), brk = d.shifts.reduce((t, s) => t + breakMs(s, nowMs), 0);
   const days = new Set(d.shifts.map(s => s.work_date));
-  $("emp-totals").innerHTML = `<div><span>Worked</span><b>${hm(worked)}</b></div><div><span>Breaks</span><b>${hm(brk)}</b></div><div><span>Days worked</span><b>${days.size}</b></div>`;
+  const leave = d.leave || [], lvTot = {};
+  for (const l of leave) lvTot[l.leave_type] = (lvTot[l.leave_type] || 0) + l.hours;
+  $("emp-totals").innerHTML = `<div><span>Worked</span><b>${hm(worked)}</b></div><div><span>Breaks</span><b>${hm(brk)}</b></div><div><span>Days worked</span><b>${days.size}</b></div>`
+    + Object.keys(LEAVE_NAME).filter(k => lvTot[k]).map(k => `<div><span>${LEAVE_NAME[k]}</span><b>${fmtH(lvTot[k])}</b></div>`).join("");
   const out = [];
   for (let i = 0; i < 14; i++){
-    const day = addDays(d.from, i); if (day > today) break;
+    const day = addDays(d.from, i);
+    if (day > today && !leave.some(l => l.work_date === day)) continue;   // future days only if leave is already recorded
     const list = d.shifts.filter(s => s.work_date === day);
-    if (!list.length){ out.push(`<div class="day-row"><span>${dayLabel(day)}</span><span>No shifts</span></div>`); continue; }
+    const lv = leave.filter(l => l.work_date === day).map(l => `<div class="leave-line">${LEAVE_NAME[l.leave_type]} ${fmtH(l.hours)}${l.note ? ` <small>· ${esc(l.note)}</small>` : ""}</div>`).join("");
+    if (!list.length && !lv){ out.push(`<div class="day-row"><span>${dayLabel(day)}</span><span>No shifts</span></div>`); continue; }
     const tot = list.reduce((t, s) => t + workedMs(s, nowMs), 0);
-    out.push(`<div class="wk"><div class="wk-head"><b>${dayLabel(day)}</b><span class="wk-tot">${hm(tot)} <span>worked</span></span></div>${list.map(shiftHTML).join("")}</div>`);
+    out.push(`<div class="wk"><div class="wk-head"><b>${dayLabel(day)}</b>${list.length ? `<span class="wk-tot">${hm(tot)} <span>worked</span></span>` : ""}</div>${lv}${list.map(shiftHTML).join("")}</div>`);
   }
   $("emp-days").innerHTML = out.reverse().join("") || `<p class="muted" style="margin:0">Nothing in this fortnight yet.</p>`;
   empMap.render([{name: fullName(p), shifts: d.shifts, withDay: true}], p.id + d.from);   // re-zoom for a new person or fortnight
