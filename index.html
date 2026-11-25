@@ -163,6 +163,7 @@ input[type=time],input[type=date],textarea.plain{width:100%;font:inherit;font-si
 .fn-pick button{min-width:0;flex:1}
 .fn-pick{display:flex;justify-self:stretch}
 .lv-act{display:flex;gap:6px;margin-top:4px}
+.alerts{display:grid;gap:6px;border-top:1px solid var(--line);padding-top:12px}
 .two-btns{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px}
 .lv-types{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
 .lv-types button{min-height:60px;font-size:16px;padding:6px 4px;background:var(--sunken);min-width:0;overflow-wrap:anywhere}
@@ -303,6 +304,22 @@ button.now-row{width:100%;text-align:left;border:0;font-weight:400;min-height:0;
       <button class="btn-primary btn-wide" id="to-dash">Dashboard</button>
       <button class="btn-wide" id="to-people">Manage people</button>
       <button class="btn-wide" id="to-settings">Settings</button>
+      <div class="alerts" id="alerts">
+        <b>Phone alerts</b>
+        <span class="muted small" id="alerts-state"></span>
+        <button class="btn-small" id="alerts-btn" hidden style="justify-self:start"></button>
+        <span class="err" id="alerts-err"></span>
+      </div>
+    </section>
+    <section class="card" id="share-card">
+      <h3>Share the app</h3>
+      <p class="muted small" style="margin:0">Send the link to a workmate. It includes how to put it on their home screen.</p>
+      <button class="btn-wide" id="share-app">Share the app</button>
+      <div class="send-box" id="share-fallback" hidden>
+        <p>Copy this and send it by text or email:</p>
+        <span class="addr" id="share-link"></span>
+        <div class="btns"><button id="share-copy">Copy message</button></div>
+      </div>
     </section>
     <button class="btn-ghost" id="logout">Log out</button>
   </main>
@@ -644,7 +661,7 @@ function showHome(){
   $("admin-card").hidden = me.role !== "admin";
   if (me.clocks_in){ loadShifts().then(renderToday); loadMyReqs(); renderNotices(); sync(); }
   else { $("sync").hidden = true; $("notices").innerHTML = ""; }
-  if (me.role === "admin") refreshApprovalCount();
+  if (me.role === "admin"){ refreshApprovalCount(); renderAlerts(); }
 }
 $("to-mine").onclick = () => location.hash = "mine";
 async function refreshApprovalCount(){
@@ -655,6 +672,56 @@ async function refreshApprovalCount(){
 }
 $("to-people").onclick = () => location.hash = "people";
 $("to-dash").onclick = () => location.hash = "dash";
+/* Phone alerts for admins (Wade, 25-11-2026): a notification on this phone when someone sends a request. */
+const pushSupported = () => "serviceWorker" in navigator && "PushManager" in window && "Notification" in window && isSecureContext;
+const isInstalled = () => matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+const b64ToBytes = b => { const s = atob((b + "=".repeat((4 - b.length % 4) % 4)).replace(/-/g, "+").replace(/_/g, "/")); return Uint8Array.from(s, c => c.charCodeAt(0)); };
+async function currentSub(){ if (!pushSupported()) return null; const reg = await navigator.serviceWorker.getRegistration(); return reg ? reg.pushManager.getSubscription() : null; }
+async function renderAlerts(){
+  const st = $("alerts-state"), btn = $("alerts-btn");
+  if (!pushSupported()){ st.textContent = "This phone or browser can't show app alerts."; btn.hidden = true; return; }
+  if (/iPhone|iPad|iPod/.test(navigator.userAgent) && !isInstalled()){ st.textContent = "On iPhone, add the app to your home screen first, then open it from there to turn on alerts."; btn.hidden = true; return; }
+  const sub = await currentSub();
+  btn.hidden = false;
+  st.textContent = sub ? "On for this phone. You'll get a notification when someone sends a request to approve." : "Off for this phone. Turn on to get a notification when someone sends a request to approve.";
+  btn.textContent = sub ? "Turn off alerts" : "Turn on alerts";
+  btn.dataset.on = sub ? "1" : "";
+}
+$("alerts-btn").onclick = async () => {
+  $("alerts-err").textContent = ""; $("alerts-btn").disabled = true;
+  try{
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if ($("alerts-btn").dataset.on){
+      if (sub){ await api("/api/push/unsubscribe", {method: "POST", body: {endpoint: sub.endpoint}}).catch(() => {}); await sub.unsubscribe(); }
+    }else{
+      const perm = await Notification.requestPermission();
+      if (perm !== "granted") throw new Error("Notifications are blocked. Allow them for this app in your phone's settings, then try again.");
+      const {key} = await api("/api/push/key");
+      if (!key) throw new Error("Alerts aren't set up on the server yet.");
+      if (!sub) sub = await reg.pushManager.subscribe({userVisibleOnly: true, applicationServerKey: b64ToBytes(key)});
+      await api("/api/push/subscribe", {method: "POST", body: {endpoint: sub.endpoint}});
+    }
+  }catch(e){ $("alerts-err").textContent = e.offline ? "No signal. Turning alerts on or off needs reception." : e.message; }
+  $("alerts-btn").disabled = false;
+  renderAlerts();
+};
+
+// Share the app (Wade, 25-11-2026): the live link plus install steps. Always the live app, even from the preview copy.
+const APP_URL = "https://wade-14.github.io/nzcs-timesheet/";
+const SHARE_TEXT = "NZCS Timesheet - clock in and out on your phone.\n\nOpen this link on your phone:\n" + APP_URL +
+  "\n\niPhone: open it in Safari, tap Share, then Add to Home Screen.\nAndroid: open it in Chrome, tap the 3 dots, then Install app.\n\nThen tap your name and enter your PIN (ask an admin for it).";
+$("share-app").onclick = async () => {
+  if (navigator.share){
+    try{ await navigator.share({title: "NZCS Timesheet", text: SHARE_TEXT}); return; }
+    catch(e){ if (e.name === "AbortError") return; }
+  }
+  $("share-link").textContent = SHARE_TEXT; $("share-link").style.whiteSpace = "pre-line"; $("share-fallback").hidden = false;
+};
+$("share-copy").onclick = async () => {
+  try{ await navigator.clipboard.writeText(SHARE_TEXT); $("share-copy").textContent = "Copied ✓"; setTimeout(() => $("share-copy").textContent = "Copy message", 2000); }
+  catch(e){ $("share-copy").textContent = "Copy failed: select the text above"; }
+};
 $("logout").onclick = async () => {
   const waiting = me.clocks_in ? (await myQueue()).length : 0;
   const msg = waiting

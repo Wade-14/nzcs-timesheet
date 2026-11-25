@@ -268,7 +268,7 @@ async function applyEvent(env, person, ev) {
     await env.DB.prepare(`INSERT INTO adjustments (id, person_id, kind, shift_id, work_date, original, requested, reason, requested_at, created_at)
       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`)
       .bind(ev.id, person.id, kind, sh ? sh.id : null, nzDate(r.start), original && JSON.stringify(original), JSON.stringify(r), reason, at, t).run();
-    return;
+    return { newRequest: { kind, work_date: nzDate(r.start) } };   // admins get a phone alert
   }
   if (ev.type === "leave") {
     const existing = await env.DB.prepare("SELECT person_id FROM leave_entries WHERE id = ?1").bind(ev.id).first();
@@ -448,17 +448,71 @@ async function decideRequest(req, env, me, id) {
   return { ok: true, status: "approved" };
 }
 
-async function syncEvents(req, env, me) {
+async function syncEvents(req, env, me, ctx) {
   if (!me.person.clocks_in) throw new HttpError(403, "Your login isn't set up to clock in.");
   const b = await readBody(req);
   const events = Array.isArray(b.events) ? b.events.slice(0, MAX_EVENTS) : [];
-  const done = [], errors = [];
+  const done = [], errors = [], requests = [];
   for (const ev of events) {   // in the order they were tapped
-    try { await applyEvent(env, me.person, ev); done.push(ev.eid); }
+    try { const r = await applyEvent(env, me.person, ev); done.push(ev.eid); if (r && r.newRequest) requests.push(r.newRequest); }
     catch (e) { errors.push({ eid: ev && ev.eid, error: e.message }); }
   }
   if (done.length) await env.DB.prepare("UPDATE people SET last_sync_at = ?1 WHERE id = ?2").bind(now(), me.person.id).run();
+  if (requests.length) {
+    const name = me.person.first_name + " " + me.person.last_name;
+    const what = r => (r.kind === "day" ? "missed day, " : "fix a shift, ") + dayText(r.work_date);
+    const body = requests.length === 1 ? `${name}: ${what(requests[0])}` : `${name} sent ${requests.length} requests (${requests.map(what).join("; ")})`;
+    const job = notifyAdmins(env, { title: "New request to approve", body, url: "#dash", exclude: me.person.id });
+    if (ctx && ctx.waitUntil) ctx.waitUntil(job.catch(() => {})); else await job;
+  }
   return { done, errors };
+}
+
+/* ---------- Phone alerts for admins (Web Push, no message body) ----------
+   Admins turn alerts on per phone. When a request arrives we record a notice and "ping" each admin phone;
+   the app's service worker then asks /api/push/notices what it was about and shows it.
+   Signed with the VAPID key pair: public key VAPID_PUBLIC (wrangler.toml var), private JWK VAPID_PRIVATE_JWK (secret). */
+const PUSH_HOSTS = [/\.googleapis\.com$/, /\.push\.apple\.com$/, /\.mozilla\.com$/, /\.notify\.windows\.com$/, /^fcm\.googleapis\.com$/];
+const b64url = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const b64urlText = text => b64url(new TextEncoder().encode(text));
+const dayText = ymd => new Date(ymd + "T12:00:00Z").toLocaleDateString("en-NZ", { timeZone: "UTC", weekday: "short" }) + " " + ymd.split("-").reverse().join("-");
+function okEndpoint(u) {
+  try { const url = new URL(u); return url.protocol === "https:" && PUSH_HOSTS.some(rx => rx.test(url.hostname)); } catch { return false; }
+}
+async function vapidJWT(env, aud) {
+  const key = await crypto.subtle.importKey("jwk", JSON.parse(env.VAPID_PRIVATE_JWK), { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"]);
+  const head = b64urlText(JSON.stringify({ typ: "JWT", alg: "ES256" }));
+  const body = b64urlText(JSON.stringify({ aud, exp: Math.floor(Date.now() / 1000) + 12 * 3600, sub: "https://wade-14.github.io/nzcs-timesheet/" }));
+  const sig = await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, key, new TextEncoder().encode(head + "." + body));
+  return head + "." + body + "." + b64url(sig);
+}
+async function notifyAdmins(env, { title, body, url, exclude }) {
+  await env.DB.prepare("INSERT INTO notices (id, kind, title, body, url, exclude_person, created_at) VALUES (?1, 'request', ?2, ?3, ?4, ?5, ?6)")
+    .bind(uid(), title.slice(0, 120), body.slice(0, 300), url, exclude || null, now()).run();
+  if (!env.VAPID_PRIVATE_JWK || !env.VAPID_PUBLIC) return;
+  const { results } = await env.DB.prepare(
+    `SELECT s.endpoint FROM push_subs s JOIN people p ON p.id = s.person_id
+      WHERE p.role = 'admin' AND p.active = 1 AND (?1 IS NULL OR s.person_id != ?1)`).bind(exclude || null).all();
+  await Promise.all(results.map(async ({ endpoint }) => {
+    try {
+      const jwt = await vapidJWT(env, new URL(endpoint).origin);
+      const r = await fetch(endpoint, { method: "POST", headers: { "Authorization": `vapid t=${jwt}, k=${env.VAPID_PUBLIC}`, "TTL": "86400", "Urgency": "high", "Content-Length": "0" } });
+      if (r.status === 404 || r.status === 410) await env.DB.prepare("DELETE FROM push_subs WHERE endpoint = ?1").bind(endpoint).run();
+    } catch { /* one bad subscription shouldn't stop the others */ }
+  }));
+}
+// The phone's service worker asks what its pings were about. It has no login, so it proves itself with its push address.
+async function pushNotices(req, env) {
+  const b = await readBody(req);
+  const sub = await env.DB.prepare(
+    `SELECT s.*, p.role, p.active FROM push_subs s JOIN people p ON p.id = s.person_id WHERE s.endpoint = ?1`).bind(String(b.endpoint ?? "").slice(0, 1000)).first();
+  if (!sub || sub.role !== "admin" || !sub.active) throw new HttpError(403, "Not signed up for alerts.");
+  const since = sub.last_fetch && sub.last_fetch > new Date(Date.now() - 2 * 86400_000).toISOString() ? sub.last_fetch : new Date(Date.now() - 15 * 60000).toISOString();
+  const { results } = await env.DB.prepare(
+    `SELECT id, title, body, url, created_at FROM notices WHERE created_at > ?1 AND (exclude_person IS NULL OR exclude_person != ?2)
+      ORDER BY created_at LIMIT 5`).bind(since, sub.person_id).all();
+  await env.DB.prepare("UPDATE push_subs SET last_fetch = ?1 WHERE endpoint = ?2").bind(now(), sub.endpoint).run();
+  return { notices: results };
 }
 
 // Shift rows → what the app gets: breaks attached, locations grouped.
@@ -540,7 +594,7 @@ async function adminDay(env, date) {
   };
 }
 
-async function route(req, env) {
+async function route(req, env, ctx) {
   const url = new URL(req.url);
   const path = url.pathname.replace(/\/+$/, "");
   const m = req.method;
@@ -553,6 +607,7 @@ async function route(req, env) {
     return { people: results.map(p => ({ id: p.id, first_name: p.first_name, last_name: p.last_name, has_pin: !!p.pin_hash })), setup: !!env.SETUP_CODE };
   }
   if (path === "/api/login" && m === "POST") return login(req, env);
+  if (path === "/api/push/notices" && m === "POST") return pushNotices(req, env);
   if (path === "/api/setup-pin" && m === "POST") return setupPin(req, env);
 
   const me = await auth(req, env);
@@ -562,7 +617,21 @@ async function route(req, env) {
     return { ok: true };
   }
 
-  if (path === "/api/sync" && m === "POST") return syncEvents(req, env, me);
+  if (path === "/api/sync" && m === "POST") return syncEvents(req, env, me, ctx);
+  if (path === "/api/push/key" && m === "GET") return { key: env.VAPID_PUBLIC || "" };
+  if (path === "/api/push/subscribe" && m === "POST") {
+    requireAdmin(me);
+    const b = await readBody(req);
+    if (!okEndpoint(b.endpoint)) throw new HttpError(400, "That phone's alert address isn't one the app recognises.");
+    await env.DB.prepare(`INSERT INTO push_subs (endpoint, person_id, created_at, last_fetch) VALUES (?1, ?2, ?3, ?3)
+      ON CONFLICT (endpoint) DO UPDATE SET person_id = excluded.person_id`).bind(b.endpoint, me.person.id, now()).run();
+    return { ok: true };
+  }
+  if (path === "/api/push/unsubscribe" && m === "POST") {
+    const b = await readBody(req);
+    await env.DB.prepare("DELETE FROM push_subs WHERE endpoint = ?1 AND person_id = ?2").bind(String(b.endpoint ?? ""), me.person.id).run();
+    return { ok: true };
+  }
   if (path === "/api/my/shifts" && m === "GET") {
     const from = url.searchParams.get("from");
     const fromDate = /^\d{4}-\d{2}-\d{2}$/.test(from || "") ? from : nzDate(Date.now() - 7 * 86400_000);
@@ -630,10 +699,10 @@ async function route(req, env) {
 }
 
 export default {
-  async fetch(req, env) {
+  async fetch(req, env, ctx) {
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors(req, env) });
     try {
-      return json(req, env, await route(req, env));
+      return json(req, env, await route(req, env, ctx));
     } catch (e) {
       if (e instanceof HttpError) return json(req, env, { error: e.message }, e.status);
       console.error(e);
@@ -642,5 +711,6 @@ export default {
   },
   async scheduled(_event, env) {
     await env.DB.prepare("DELETE FROM sessions WHERE expires_at < ?1").bind(now()).run();
+    await env.DB.prepare("DELETE FROM notices WHERE created_at < ?1").bind(new Date(Date.now() - 2 * 86400_000).toISOString()).run();
   },
 };

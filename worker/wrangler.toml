@@ -10,7 +10,11 @@ database_name = "nzcs-timesheet"
 database_id = "1296243b-702e-4288-813e-0a039ef54f27"
 migrations_dir = "migrations"
 
-[triggers]
-crons = ["23 14 * * *"]   # daily tidy-up (~3am NZ): removes expired logins
+[vars]
+# Public half of the phone-alert signing key (safe to publish). The private half is the VAPID_PRIVATE_JWK secret.
+VAPID_PUBLIC = "BFXlZH376sKvrgsTDYmvkzpVNy2Tk984pqzy-myorZys_SOa8xEWu8oOIEFedqGfDdqG2OkR0WtVs2cavsS93ks"
 
-# SETUP_CODE is a Cloudflare secret (wrangler secret put SETUP_CODE), never written here.
+[triggers]
+crons = ["23 14 * * *"]   # daily tidy-up (~3am NZ): removes expired logins and old alert notices
+
+# SETUP_CODE and VAPID_PRIVATE_JWK are Cloudflare secrets, never written here.
