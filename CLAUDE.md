@@ -42,6 +42,13 @@ This file records the brief and every decision the owner (Wade) makes, so work c
 - `preview/`: full copy of the app for testing. Same files.
 - `worker/`: Cloudflare Worker (`src/index.js`), D1 migrations (`migrations/`), `wrangler.toml`.
 
+## Storage (Wade asked, 25-11-2026)
+
+- **Everything is stored in the Cloudflare D1 database `nzcs-timesheet`** (Oceania) on Wade's account: people, logins, shifts, breaks, jobs text, locations, requests, leave, settings, alert sign-ups. Phones only keep a working copy (last 14 days + anything waiting to sync) so the app works offline; losing a phone loses only entries that never synced.
+- **PDFs are not stored anywhere**: made on the phone when downloaded, then emailed by the person.
+- Size on 25-11-2026: 139 KB (empty: just the tables). Estimate ~1 KB per person per working day (shift + breaks + jobs + indexes), so 12 workers ≈ 3–5 MB a year. D1 free plan: 500 MB per database (5 GB across the account; NZCS Forms 471 KB, SFS Forms 33 KB), 100,000 row writes and 5 million row reads a day. Normal use is a few hundred writes a day; the 30-second dashboard refresh reads a small number of indexed rows. **Nothing is deleted automatically** except expired logins and 2-day-old alert notices, so history is kept indefinitely.
+- Cloudflare's D1 Time Travel can restore the database to an earlier point (about the last 7 days on the free plan). For a longer backup, export it (`npx wrangler d1 export nzcs-timesheet --remote --output=<file>.sql`).
+
 ## Release process (same as the forms apps)
 
 1. Edit files in `preview/`, test (see Testing), push, and let Wade try the preview if the change is big.
