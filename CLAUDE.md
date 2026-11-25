@@ -19,6 +19,7 @@ This file records the brief and every decision the owner (Wade) makes, so work c
 - **25-11-2026:** Wade chose to change the **dashboard** before step 6: "Clocked in now" list + **View employees** → tap a name → that person's clocking history. Built, tested, migration 0006 applied live, Worker redeployed, app released (cache `nzcst-v3`). Step 6 (leave) is next.
 - **25-11-2026:** Wade said go on **step 6 (leave)**, then changed it mid-build: leave is a **record, not a request** (see "4. Leave"). Built, tested, migration 0007 applied live, Worker redeployed, app released (cache `nzcst-v4`). Step 7 (fortnightly PDF) is next.
 - **25-11-2026:** Wade set the fortnight start (**30-11-2026**, checked on the live database), asked for admins to edit/delete anyone's leave, and specified step 7 (download, not send). Built, tested, migration 0008 applied live, Worker redeployed, app released (cache `nzcst-v5`). Next: step 8 (try with a few staff, then everyone).
+- **25-11-2026:** **Staff guide** written (Claude Doc, see Files) with screenshots, for Wade to hand out. Wade starts demoing next week (possibly with one other person), then rolls out. Night-shift check (Wade's question): fixed the "forgot to clock out?" warning so it only shows after 16 hours (cache `nzcst-v6`).
 
 ## Where things are
 
@@ -36,6 +37,7 @@ This file records the brief and every decision the owner (Wade) makes, so work c
 - `vendor/jspdf.umd.min.js`, `vendor/jspdf.plugin.autotable.min.js`, `vendor/logo.js` (`window.NZCS_LOGO`): copied from NZCS Forms for the fortnight PDF; loaded only when a PDF is made.
 - `vendor/leaflet/`: Leaflet 1.9.4 (`leaflet.js`, `leaflet.css`, `LICENSE`; local copy, source-map line removed). Loaded only when an admin opens the dashboard.
 - `manifest.webmanifest`, `icon-*.png` (copied from NZCS Forms), `robots.txt`.
+- **Staff guide:** Claude Doc **"NZCS Timesheet – Staff Guide"** https://claude.ai/artifact/UDNcnh9HG6rrhmfKfKusP2 (sections: what it's for, install on iPhone/Android, logging in, your day, no signal, fixing times / missed day, leave, fortnight PDF + email, for admins, rules + troubleshooting). Screenshots in `docs/guide-images/` (taken from a local test copy with sample data, light theme). **When a change affects anything staff see or do, update the guide in the same piece of work and tell Wade** (offer to update the doc; retake the screenshot if a screen changed).
 - `preview/`: full copy of the app for testing. Same files.
 - `worker/`: Cloudflare Worker (`src/index.js`), D1 migrations (`migrations/`), `wrangler.toml`.
 
@@ -140,12 +142,13 @@ How step 1 works (built 24-11-2026; details chosen by Claude, tell Wade if any n
 - **More than one shift a day is allowed (Wade, 24-11-2026):** clock out and clock back in later the same day. Each is its own shift; the day's total adds them up.
 - **No undo and no "are you sure?" (Wade, 24-11-2026):** every tap saves straight away. Mistakes are fixed through an adjustment request (step 5). (Claude had suggested a 2-minute undo; Wade chose neither.) A fast double tap is still only saved once.
 - **Shifts past midnight (Wade, 24-11-2026: crews sometimes work past midnight, e.g. night shooting):** a shift counts on the NZ date it **started**.
+- **Night shifts stay one shift (Wade, 25-11-2026):** e.g. clock in 7pm on the 25th, clock out 2am on the 26th = one clocking, on the 25th, finish shown "2:00am (next day)". The "forgot to clock out?" warnings (worker home amber note, dashboard amber "On site") only appear once someone has been clocked in **more than 16 hours** (`STALE_MS` in index.html), not just because the date changed. Checked with a simulated phone clock at 2am (no warning) and 17 h later (warning).
 
 How step 2 works (built 24-11-2026):
 
 - Home screen (people who clock in): sync line, then the **Today** card: day and date, big status ("Not clocked in" / "Clocked in since 7:02am" / "On break since 10:15am" / "Clocked out at 4:30pm"), then **only the buttons that make sense**: Not clocked in → **Clock In**. Clocked in → **Start Break** (orange) and **Clock Out**. On break → **End Break** and a smaller **Clock Out**. Below: Worked today and Breaks totals (count up live) and a list of today's shifts with their breaks.
 - Clocking out while on a break ends the break at the clock-out time.
-- Still clocked in from an earlier day: amber note "You've been clocked in since <day> at <time>. If you forgot to clock out, clock out now and ask an admin to fix the time." The shift stays on its start day.
+- Still clocked in **more than 16 hours** (see night shifts above): amber note "You've been clocked in since <day> at <time>. If you forgot to clock out, clock out now and ask an admin to fix the time." The shift stays on its start day.
 - **Location:** before a person's first Clock In on a phone, a box explains that location is recorded only at Clock In and Clock Out and to choose "Allow while using the app" (then "OK, clock me in"). The tap's time is saved instantly; GPS is added when it arrives (waits up to 20 s). Denied or no fix → saved as `denied` / `unavailable` and the shift shows "Location not recorded" (admins see it as "no location" in step 4).
 - **Offline:** every tap is saved on the phone first (IndexedDB queue, in tap order, tagged with the person) and sent to `POST /api/sync`. IDs are made on the phone, so a tap sent twice is only saved once. Sync runs after each tap, when signal returns, when the app comes to the front, and every minute. The sync line says "✓ All synced" or "N entries waiting to sync (no signal)" with **Try now**. If the server rejects an entry it stays on the phone and the line turns red with the reason.
 - Times are the **phone's time at the tap**, not the sync time. The server also stores when it received each shift (`created_at`) so late or odd syncs can be spotted.

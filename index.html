@@ -738,6 +738,7 @@ const uuid = () => crypto.randomUUID();
 // Worked time = on site minus breaks (running shifts and breaks count up to now).
 function breakMs(sh, nowMs){ return sh.breaks.reduce((t, b) => t + ((b.end_at ? Date.parse(b.end_at) : nowMs) - Date.parse(b.start_at)), 0); }
 function workedMs(sh, nowMs){ return (sh.clock_out_at ? Date.parse(sh.clock_out_at) : nowMs) - Date.parse(sh.clock_in_at) - breakMs(sh, nowMs); }
+const STALE_MS = 16 * 3600_000;   // clocked in longer than this = probably forgot to clock out
 const openShift = () => shifts.find(s => !s.clock_out_at);
 // The shift the jobs box is for: the one they're clocked into, or (once clocked out) their last shift today.
 function jobsShift(){
@@ -758,7 +759,8 @@ function renderToday(){
   else { const last = shifts.filter(s => s.work_date === today).pop(); if (last) status = "Clocked out at " + nzTime(last.clock_out_at); }
   $("today-status").textContent = status;
   // Still clocked in from an earlier day (forgot to clock out, or a night shift)
-  const stale = open && open.work_date !== today;
+  // "Forgot to clock out?" only after 16 hours: a night shift (e.g. 7pm to 2am) running past midnight is normal (Wade, 25-11-2026)
+  const stale = open && nowMs - Date.parse(open.clock_in_at) > STALE_MS;
   $("stale-note").hidden = !stale;
   if (stale) $("stale-note").textContent = `You've been clocked in since ${nzDayLabel(open.clock_in_at)} at ${nzTime(open.clock_in_at)}. If you forgot to clock out, clock out now and ask an admin to fix the time.`;
   // Buttons: only the ones that make sense right now
@@ -1354,8 +1356,8 @@ function personStatus(p, nowMs){
   const brk = openBreak(p.open);
   if (brk) return {cls: "st-break", label: "On break", since: "since " + nzTime(brk.start_at), rank: 1};
   if (p.open){
-    const old = p.open.work_date !== nzDate(nowMs);
-    return {cls: old ? "st-warn" : "st-on", label: "On site", since: "since " + (old ? dayName(p.open.work_date) + " " : "") + nzTime(p.open.clock_in_at) + (old ? " (forgot to clock out?)" : ""), rank: 0};
+    const otherDay = p.open.work_date !== nzDate(nowMs), old = nowMs - Date.parse(p.open.clock_in_at) > STALE_MS;
+    return {cls: old ? "st-warn" : "st-on", label: "On site", since: "since " + (otherDay ? dayName(p.open.work_date) + " " : "") + nzTime(p.open.clock_in_at) + (old ? " (forgot to clock out?)" : ""), rank: 0};
   }
   return null;
 }
