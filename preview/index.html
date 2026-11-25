@@ -157,6 +157,12 @@ input[type=time],input[type=date],textarea.plain{width:100%;font:inherit;font-si
 .brk{display:grid;grid-template-columns:1fr auto 1fr 52px;gap:8px;align-items:center}
 .brk span{color:var(--muted)}
 .brk button{min-height:54px;padding:0;font-size:20px}
+.send-box{background:var(--forest-soft);border-radius:var(--r);padding:12px 14px;display:grid;gap:8px}
+.send-box p{margin:0}
+.addr{font-family:ui-monospace,Menlo,monospace;font-size:15px;background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:2px 6px;user-select:all;word-break:break-all}
+.fn-pick button{min-width:0;flex:1}
+.fn-pick{display:flex;justify-self:stretch}
+.lv-act{display:flex;gap:6px;margin-top:4px}
 .two-btns{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px}
 .lv-types{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
 .lv-types button{min-height:60px;font-size:16px;padding:6px 4px;background:var(--sunken);min-width:0;overflow-wrap:anywhere}
@@ -305,6 +311,19 @@ button.now-row{width:100%;text-align:left;border:0;font-weight:400;min-height:0;
   <main id="s-mine" hidden>
     <div class="pin-who"><button class="btn-ghost btn-small" id="mine-back">‹ Home</button><b>My shifts</b></div>
     <p class="ok-note" id="mine-msg" hidden></p>
+    <section class="card" id="fn-card">
+      <h3>Fortnight timesheet</h3>
+      <div class="seg fn-pick" id="fn-pick"><button type="button" data-v="0">This fortnight</button><button type="button" data-v="-1">Last fortnight</button></div>
+      <p class="muted small" id="fn-range" style="margin:0"></p>
+      <button class="btn-primary btn-wide" id="fn-dl">Download my fortnight (PDF)</button>
+      <p class="err" id="fn-err"></p>
+      <div class="send-box" id="fn-send" hidden>
+        <b>Now email it to Sam</b>
+        <p>Send the PDF to <span class="addr" id="fn-addr">admin@nzconservation.nz</span></p>
+        <div class="btns"><button class="btn-primary" id="fn-share" hidden>Email the PDF</button><a class="btn" id="fn-mail">Open email</a><button id="fn-copy">Copy address</button></div>
+        <p class="muted small" id="fn-hint" style="margin:0"></p>
+      </div>
+    </section>
     <div class="two-btns">
       <button class="btn-primary" id="add-leave">+ Record leave</button>
       <button class="btn-primary" id="add-missed">+ Add a missed day</button>
@@ -349,9 +368,9 @@ button.now-row{width:100%;text-align:left;border:0;font-weight:400;min-height:0;
 
   <!-- Record leave -->
   <main id="s-leave" hidden>
-    <div class="pin-who"><button class="btn-ghost btn-small" id="lv-back">‹ My shifts</button><b>Record leave</b></div>
+    <div class="pin-who"><button class="btn-ghost btn-small" id="lv-back">‹ My shifts</button><b id="lv-title">Record leave</b></div>
     <section class="card">
-      <p class="note" style="margin:0">This doesn't ask for leave. Sort it out with your manager by phone or text first, then put it here so it's on your timesheet.</p>
+      <p class="note" id="lv-intro" style="margin:0">This doesn't ask for leave. Sort it out with your manager by phone or text first, then put it here so it's on your timesheet.</p>
       <div class="field"><span class="label">Type of leave</span>
         <div class="lv-types" id="lv-type"><button type="button" data-v="sick">Sick</button><button type="button" data-v="annual">Annual</button><button type="button" data-v="bereavement">Bereavement</button></div></div>
       <div class="row2">
@@ -411,6 +430,7 @@ button.now-row{width:100%;text-align:left;border:0;font-weight:400;min-height:0;
     <p class="err" id="emp-err"></p>
     <section class="card">
       <h3>Fortnight totals</h3>
+      <button class="btn-wide" id="emp-pdf">Download PDF timesheet</button>
       <div class="totals" id="emp-totals"></div>
       <p class="muted small" id="fn-note" style="margin:0" hidden></p>
     </section>
@@ -524,6 +544,7 @@ function route(){
   if (h === "mine" && me.clocks_in) return showMine();
   if (h === "missed" && me.clocks_in) return showAdjust(null);
   if (h === "leave" && me.clocks_in) return showLeave();
+  if (h.startsWith("lvedit-") && me.role === "admin") return showLeaveEdit(h.slice(7));
   if (h.startsWith("fix-") && me.clocks_in) return showAdjust(h.slice(4));
   if (h.startsWith("person-") && me.role === "admin") return showPerson(h.slice(7));
   showHome();
@@ -984,6 +1005,7 @@ async function showMine(msg){
   show("s-mine");
   $("mine-msg").hidden = !msg; $("mine-msg").textContent = msg || "";
   await loadShifts(); loadMyReqs(); loadMyLeave();
+  $("fn-send").hidden = true; $("fn-err").textContent = ""; renderFnCard();
   renderMine();
   sync();
 }
@@ -1054,15 +1076,38 @@ async function leaveEntries(){
   return waiting.concat(myLeave.filter(l => !waiting.some(w => w.id === l.id))).filter(l => !removing.has(l.id));
 }
 
+let lvEditing = null;   // an admin editing someone's leave: {id, person_id, name, ...}
 function showLeave(){
   show("s-leave");
+  lvEditing = null; lvMode(false);
   lvHours = {};
   segSet($("lv-type"), "");
   const t = nzDate(Date.now());
   $("lv-from").value = t; $("lv-to").value = t; $("lv-to").min = t; $("lv-note").value = ""; $("lv-err").textContent = "";
   renderLeaveDays();
 }
-$("lv-back").onclick = () => location.hash = "mine";
+function lvMode(edit){
+  $("lv-title").textContent = edit ? "Edit leave · " + lvEditing.name : "Record leave";
+  $("lv-intro").hidden = edit;
+  $("lv-send").textContent = edit ? "Save changes" : "Save leave";
+  $("lv-back").textContent = edit ? "‹ Back" : "‹ My shifts";
+}
+async function showLeaveEdit(id){
+  show("s-leave");
+  $("lv-err").textContent = "";
+  try{
+    lvEditing = (await api("/api/admin/leave/" + id)).leave;
+  }catch(e){ if (e.status === 401) return logOutHere(); $("lv-err").textContent = e.offline ? "No signal. Editing leave needs reception." : e.message; return; }
+  lvMode(true);
+  segSet($("lv-type"), lvEditing.leave_type);
+  $("lv-from").value = lvEditing.start_date; $("lv-to").value = lvEditing.end_date; $("lv-to").min = lvEditing.start_date;
+  lvHours = {};
+  for (let d = lvEditing.start_date; d <= lvEditing.end_date; d = addDaysNZ(d, 1)) lvHours[d] = 0;
+  for (const d of lvEditing.days) lvHours[d.date] = d.hours;
+  $("lv-note").value = lvEditing.note || "";
+  renderLeaveDays();
+}
+$("lv-back").onclick = () => { if (lvEditing) history.back(); else location.hash = "mine"; };
 $("add-leave").onclick = () => location.hash = "leave";
 $("lv-type").addEventListener("click", e => { const b = e.target.closest("button"); if (b){ segSet($("lv-type"), b.dataset.v); $("lv-err").textContent = ""; } });
 $("lv-from").oninput = () => { if (!$("lv-to").value || $("lv-to").value < $("lv-from").value) $("lv-to").value = $("lv-from").value; $("lv-to").min = $("lv-from").value; renderLeaveDays(); };
@@ -1097,6 +1142,14 @@ $("lv-send").onclick = async () => {
     : !days.length ? "Put hours on at least one day." : "";
   if (err) return $("lv-err").textContent = err;
   $("lv-send").disabled = true;
+  if (lvEditing){   // admin changing someone's leave: straight to the server (needs signal)
+    try{
+      await api("/api/admin/leave/" + lvEditing.id, {method: "PUT", body: {leave_type: type, days, note: $("lv-note").value.trim()}});
+      history.back();   // back to the same person and fortnight, which reloads
+    }catch(e){ if (e.status === 401) logOutHere(); $("lv-err").textContent = e.offline ? "No signal. Saving needs reception." : e.message; }
+    $("lv-send").disabled = false;
+    return;
+  }
   try{
     await queueAdd({person_id: me.id, eid: uuid(), made: Date.now(), type: "leave", id: uuid(), leave_type: type, days, note: $("lv-note").value.trim(), at: new Date().toISOString()});
     history.replaceState(null, "", "#mine");
@@ -1414,7 +1467,8 @@ function renderEmp(){
     const day = addDays(d.from, i);
     if (day > today && !leave.some(l => l.work_date === day)) continue;   // future days only if leave is already recorded
     const list = d.shifts.filter(s => s.work_date === day);
-    const lv = leave.filter(l => l.work_date === day).map(l => `<div class="leave-line">${LEAVE_NAME[l.leave_type]} ${fmtH(l.hours)}${l.note ? ` <small>· ${esc(l.note)}</small>` : ""}</div>`).join("");
+    const lv = leave.filter(l => l.work_date === day).map(l => `<div class="leave-line">${LEAVE_NAME[l.leave_type]} ${fmtH(l.hours)}${l.note ? ` <small>· ${esc(l.note)}</small>` : ""}
+      <div class="lv-act"><button class="btn-small" data-lvedit="${esc(l.entry_id)}">Edit</button><button class="btn-small btn-danger" data-lvdel="${esc(l.entry_id)}">Delete</button></div></div>`).join("");
     if (!list.length && !lv){ out.push(`<div class="day-row"><span>${dayLabel(day)}</span><span>No shifts</span></div>`); continue; }
     const tot = list.reduce((t, s) => t + workedMs(s, nowMs), 0);
     out.push(`<div class="wk"><div class="wk-head"><b>${dayLabel(day)}</b>${list.length ? `<span class="wk-tot">${hm(tot)} <span>worked</span></span>` : ""}</div>${lv}${list.map(shiftHTML).join("")}</div>`);
@@ -1422,6 +1476,138 @@ function renderEmp(){
   $("emp-days").innerHTML = out.reverse().join("") || `<p class="muted" style="margin:0">Nothing in this fortnight yet.</p>`;
   empMap.render([{name: fullName(p), shifts: d.shifts, withDay: true}], p.id + d.from);   // re-zoom for a new person or fortnight
 }
+
+$("emp-days").addEventListener("click", async e => {
+  const ed = e.target.closest("[data-lvedit]"), del = e.target.closest("[data-lvdel]");
+  if (ed) location.hash = "lvedit-" + ed.dataset.lvedit;
+  if (del){
+    const rows = (empData.leave || []).filter(l => l.entry_id === del.dataset.lvdel);
+    const what = rows.length ? `${LEAVE_NAME[rows[0].leave_type]} (${rows.map(r => dayLabel(r.work_date)).join(", ")})` : "this leave";
+    if (!confirm(`Delete ${what} from ${fullName(empData.person)}'s timesheet?` + (rows.length > 1 ? " This deletes the whole entry." : ""))) return;
+    try{ await api("/api/admin/leave/" + del.dataset.lvdel, {method: "DELETE"}); loadEmp(); }
+    catch(ex){ $("emp-err").textContent = ex.message; }
+  }
+});
+$("emp-pdf").onclick = async () => {
+  if (!empData) return;
+  $("emp-pdf").disabled = true;
+  try{ const f = await fortnightPDF(empData); downloadFile(f); }
+  catch(e){ $("emp-err").textContent = "Couldn't make the PDF. (" + e.message + ")"; }
+  $("emp-pdf").disabled = false;
+};
+
+/* ---------- Fortnight PDF (step 7) ----------
+   Made on the phone with jsPDF (loaded only when needed). Workers download their own and email it to Sam
+   themselves (Wade, 25-11-2026: no sending from the app); admins can download anyone's. */
+const PAYROLL_EMAIL = "admin@nzconservation.nz";
+let pdfLoading = null;
+function loadPdfLibs(){
+  if (window.jspdf && window.jspdf.jsPDF && window.NZCS_LOGO) return Promise.resolve();
+  if (!pdfLoading) pdfLoading = ["vendor/jspdf.umd.min.js", "vendor/jspdf.plugin.autotable.min.js", "vendor/logo.js"].reduce((p, src) => p.then(() => new Promise((res, rej) => {
+    const js = document.createElement("script"); js.src = src; js.onload = res; js.onerror = () => rej(new Error("couldn't load " + src)); document.head.appendChild(js);
+  })), Promise.resolve()).catch(e => { pdfLoading = null; throw e; });
+  return pdfLoading;
+}
+const dec = ms => (ms / 3600000).toFixed(2);
+const hmDec = ms => `${hm(ms)} (${dec(ms)})`;
+async function fortnightPDF(d){
+  await loadPdfLibs();
+  const {jsPDF} = window.jspdf, doc = new jsPDF({unit: "mm", format: "a4"});
+  const p = d.person, name = fullName(p), W = doc.internal.pageSize.getWidth();
+  const closed = d.shifts.filter(s => s.clock_out_at), open = d.shifts.filter(s => !s.clock_out_at);
+  try{ doc.addImage(window.NZCS_LOGO, "JPEG", 14, 10, 20, 20.7); }catch(e){}
+  doc.setFont("helvetica", "bold"); doc.setFontSize(18); doc.text("Timesheet", 38, 17);
+  doc.setFontSize(12); doc.text(name, 38, 24);
+  doc.setFont("helvetica", "normal"); doc.setFontSize(10);
+  doc.text(`Fortnight ${dayLabel(d.from)} to ${dayLabel(d.to)}`, 38, 30);
+  doc.text("NZ Conservation Services Ltd", W - 14, 17, {align: "right"});
+  let y = 38;
+  if (open.length){
+    doc.setTextColor(179, 38, 30); doc.setFont("helvetica", "bold");
+    doc.text(`${open.length} shift${open.length > 1 ? "s" : ""} not clocked out yet (not counted in the hours).`, 14, y); y += 6;
+    doc.setTextColor(0); doc.setFont("helvetica", "normal");
+  }
+  // One row per shift and per leave day; days with nothing get one plain row
+  const body = [];
+  for (let i = 0; i < 14; i++){
+    const day = addDays(d.from, i), list = d.shifts.filter(s => s.work_date === day), lv = (d.leave || []).filter(l => l.work_date === day);
+    const label = dayLabel(day);
+    if (!list.length && !lv.length){ body.push([{content: label, styles: {textColor: 120}}, {content: "No shifts", colSpan: 5, styles: {textColor: 120}}]); continue; }
+    list.forEach((s, k) => {
+      const adj = s.adjusted ? "*" : "";
+      const brk = s.breaks.filter(b => b.end_at).map(b => `${nzTime(b.start_at)}-${nzTime(b.end_at)}`).join(", ") || "-";
+      const job = (s.jobs || "").trim() + (s.adjusted ? `\n* Adjusted${s.adjustment && s.adjustment.approved_by ? ", approved by " + s.adjustment.approved_by : ""}${s.adjustment && s.adjustment.kind === "day" ? " (missed day added)" : ""}` : "");
+      body.push([k ? "" : label, nzTime(s.clock_in_at) + adj, s.clock_out_at ? nzTime(s.clock_out_at) + adj + (nzDate(s.clock_out_at) !== s.work_date ? " (next day)" : "") : "Not clocked out",
+        brk, s.clock_out_at ? hmDec(workedMs(s, 0)) : "-", job || "-"]);
+    });
+    lv.forEach((l, k) => body.push([list.length || k ? "" : label, {content: LEAVE_NAME[l.leave_type] + (l.note ? " - " + l.note : ""), colSpan: 3, styles: {fontStyle: "bold"}}, `${dec(l.hours * 3600000)} h`, ""]));
+  }
+  doc.autoTable({startY: y, head: [["Day", "In", "Out", "Breaks", "Hours", "Job / where"]], body, theme: "grid",
+    styles: {fontSize: 8.5, cellPadding: 1.6, valign: "top", overflow: "linebreak"},
+    headStyles: {fillColor: [29, 90, 64], textColor: 255},
+    columnStyles: {0: {cellWidth: 25}, 1: {cellWidth: 16}, 2: {cellWidth: 24}, 3: {cellWidth: 28}, 4: {cellWidth: 23}, 5: {cellWidth: "auto"}}, margin: {left: 14, right: 14}});
+  // Totals
+  const worked = closed.reduce((t, s) => t + workedMs(s, 0), 0), brk = closed.reduce((t, s) => t + breakMs(s, 0), 0);
+  const lvTot = {}; for (const l of d.leave || []) lvTot[l.leave_type] = (lvTot[l.leave_type] || 0) + l.hours * 3600000;
+  const rows = [["Hours worked", hmDec(worked)], ["Breaks (not counted)", hmDec(brk)]];
+  for (const k of Object.keys(LEAVE_NAME)) if (lvTot[k]) rows.push([LEAVE_NAME[k], hmDec(lvTot[k])]);
+  const all = worked + Object.values(lvTot).reduce((a, b) => a + b, 0);
+  rows.push([{content: "Total (worked + leave)", styles: {fontStyle: "bold"}}, {content: hmDec(all), styles: {fontStyle: "bold"}}]);
+  doc.autoTable({startY: doc.lastAutoTable.finalY + 6, head: [["Fortnight totals", ""]], body: rows, theme: "grid", tableWidth: 100,
+    styles: {fontSize: 10, cellPadding: 2}, headStyles: {fillColor: [29, 90, 64], textColor: 255}, margin: {left: 14}});
+  // Footer on every page
+  const made = `Made ${dmy(nzDate(Date.now()))} ${nzTime(Date.now())}${me ? " by " + fullName(me) : ""}. Hours shown as h m (decimal hours). * = time changed by an approved adjustment.`;
+  const pages = doc.getNumberOfPages();
+  for (let i = 1; i <= pages; i++){ doc.setPage(i); doc.setFontSize(7.5); doc.setTextColor(110); doc.text(made, 14, 290); doc.text(`Page ${i} of ${pages}`, W - 14, 290, {align: "right"}); }
+  const fileName = `NZCS Timesheet - ${name} - ${dmy(d.from)} to ${dmy(d.to)}.pdf`;
+  return new File([doc.output("blob")], fileName, {type: "application/pdf"});
+}
+function downloadFile(f){
+  const url = URL.createObjectURL(f), a = document.createElement("a");
+  a.href = url; a.download = f.name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
+/* Worker: download my fortnight, then email it to Sam */
+let fnOffset = 0, fnFile = null;
+async function renderFnCard(){
+  const st = await loadSettings(), cur = fortnightOf(nzDate(Date.now()), st.fortnight_start);
+  const from = addDays(cur.start, fnOffset * 14), to = addDays(from, 13);
+  segSet($("fn-pick"), fnOffset);
+  $("fn-range").textContent = `${dayLabel(from)} to ${dayLabel(to)}`;
+  return {from, to};
+}
+$("fn-pick").addEventListener("click", e => { const b = e.target.closest("button"); if (!b) return; fnOffset = +b.dataset.v; $("fn-send").hidden = true; $("fn-err").textContent = ""; renderFnCard(); });
+$("fn-dl").onclick = async () => {
+  $("fn-err").textContent = ""; $("fn-dl").disabled = true; $("fn-dl").textContent = "Making the PDF…";
+  try{
+    await sync();
+    if ((await myQueue()).length) throw Object.assign(new Error(""), {waiting: true});
+    const {from, to} = await renderFnCard();
+    const data = await api(`/api/my/fortnight?from=${from}&to=${to}`);
+    fnFile = await fortnightPDF(data);
+    downloadFile(fnFile);
+    const subject = `Timesheet - ${fullName(me)} - ${dmy(from)} to ${dmy(to)}`;
+    $("fn-mail").href = `mailto:${PAYROLL_EMAIL}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent("Hi Sam,\n\nMy timesheet for " + dmy(from) + " to " + dmy(to) + " is attached.\n\n" + me.first_name)}`;
+    const canShare = navigator.canShare && navigator.canShare({files: [fnFile]});
+    $("fn-share").hidden = !canShare;
+    $("fn-hint").textContent = canShare ? "Email the PDF opens your phone's share menu: pick your email app and send it to the address above. Or use Open email and attach the PDF you just downloaded."
+      : "Open email starts an email to Sam. Attach the PDF you just downloaded (it's in your Downloads / Files).";
+    $("fn-send").hidden = false; $("fn-send").scrollIntoView({behavior: "smooth", block: "center"});
+  }catch(e){
+    $("fn-err").textContent = e.waiting ? "Some entries haven't synced yet. Get signal so everything is on the timesheet, then try again."
+      : e.offline ? "No signal. Making the PDF needs reception so it has everything." : "Couldn't make the PDF. (" + e.message + ")";
+  }
+  $("fn-dl").disabled = false; $("fn-dl").textContent = "Download my fortnight (PDF)";
+};
+$("fn-share").onclick = async () => {
+  try{ await navigator.share({files: [fnFile], title: fnFile.name, text: "Timesheet for Sam (" + PAYROLL_EMAIL + ")"}); }
+  catch(e){ if (e.name !== "AbortError") $("fn-err").textContent = "Couldn't open the share menu. Use Open email instead."; }
+};
+$("fn-copy").onclick = async () => {
+  try{ await navigator.clipboard.writeText(PAYROLL_EMAIL); $("fn-copy").textContent = "Copied ✓"; setTimeout(() => $("fn-copy").textContent = "Copy address", 2000); }
+  catch(e){ $("fn-copy").textContent = "Copy failed"; }
+};
 
 /* ---------- Admin: settings ---------- */
 async function showSettings(){

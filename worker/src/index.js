@@ -15,7 +15,7 @@ function cors(req, env) {
   const ok = ALLOWED_ORIGINS.concat(extra).includes(origin);
   return {
     "Access-Control-Allow-Origin": ok ? origin : ALLOWED_ORIGINS[0],
-    "Access-Control-Allow-Methods": "GET,POST,PUT,OPTIONS",
+    "Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, Authorization",
     "Access-Control-Max-Age": "86400",
     "Vary": "Origin",
@@ -273,18 +273,7 @@ async function applyEvent(env, person, ev) {
   if (ev.type === "leave") {
     const existing = await env.DB.prepare("SELECT person_id FROM leave_entries WHERE id = ?1").bind(ev.id).first();
     if (existing) { if (existing.person_id !== person.id) throw new Error("That leave belongs to someone else."); return; }
-    const type = LEAVE_TYPES.includes(ev.leave_type) ? ev.leave_type : null;
-    if (!type) throw new Error("Pick the type of leave.");
-    const days = (Array.isArray(ev.days) ? ev.days : []).slice(0, MAX_LEAVE_DAYS + 1).map(d => {
-      if (!d || !isYmd(d.date)) throw new Error("A leave day is missing its date.");
-      const h = Math.round(Number(d.hours) * 100) / 100;
-      if (!(h > 0 && h <= 24)) throw new Error("Leave hours must be more than 0 and no more than 24 a day.");
-      return { date: d.date, hours: h };
-    }).sort((a, b) => a.date < b.date ? -1 : 1);
-    if (!days.length) throw new Error("The leave has no days with hours.");
-    if (days.length > MAX_LEAVE_DAYS) throw new Error(`Leave can be recorded for up to ${MAX_LEAVE_DAYS} days at a time.`);
-    for (let i = 1; i < days.length; i++) if (days[i].date === days[i - 1].date) throw new Error("The same day is in the leave twice.");
-    const note = String(ev.note ?? "").trim().slice(0, MAX_JOBS) || null;
+    const { type, days, note } = cleanLeave(ev);
     await env.DB.batch([
       env.DB.prepare(`INSERT INTO leave_entries (id, person_id, leave_type, start_date, end_date, note, entered_at, created_at)
         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`).bind(ev.id, person.id, type, days[0].date, days[days.length - 1].date, note, at, t),
@@ -303,6 +292,47 @@ async function applyEvent(env, person, ev) {
 }
 
 /* ---------- Leave (step 6) ---------- */
+function cleanLeave(b) {
+  const type = LEAVE_TYPES.includes(b.leave_type) ? b.leave_type : null;
+  if (!type) throw new Error("Pick the type of leave.");
+  const days = (Array.isArray(b.days) ? b.days : []).slice(0, MAX_LEAVE_DAYS + 1).map(d => {
+    if (!d || !isYmd(d.date)) throw new Error("A leave day is missing its date.");
+    const h = Math.round(Number(d.hours) * 100) / 100;
+    if (!(h > 0 && h <= 24)) throw new Error("Leave hours must be more than 0 and no more than 24 a day.");
+    return { date: d.date, hours: h };
+  }).sort((a, b) => a.date < b.date ? -1 : 1);
+  if (!days.length) throw new Error("The leave has no days with hours.");
+  if (days.length > MAX_LEAVE_DAYS) throw new Error(`Leave can be recorded for up to ${MAX_LEAVE_DAYS} days at a time.`);
+  for (let i = 1; i < days.length; i++) if (days[i].date === days[i - 1].date) throw new Error("The same day is in the leave twice.");
+  const note = String(b.note ?? "").trim().slice(0, MAX_JOBS) || null;
+  return { type, days, note };
+}
+
+// Admins editing / deleting anyone's leave (Wade, 25-11-2026).
+async function adminLeave(req, env, me, id, method) {
+  const l = await env.DB.prepare("SELECT * FROM leave_entries WHERE id = ?1 AND removed_at IS NULL").bind(id).first();
+  if (!l) throw new HttpError(404, "That leave wasn't found (it may have been removed).");
+  if (method === "GET") {
+    const { results } = await env.DB.prepare("SELECT work_date, hours FROM leave_days WHERE entry_id = ?1 ORDER BY work_date").bind(id).all();
+    const p = await getPerson(env, l.person_id);
+    return { leave: { id: l.id, person_id: l.person_id, name: p.first_name + " " + p.last_name, leave_type: l.leave_type, note: l.note,
+      start_date: l.start_date, end_date: l.end_date, days: results.map(d => ({ date: d.work_date, hours: d.hours })) } };
+  }
+  const t = now();
+  if (method === "DELETE") {
+    await env.DB.prepare("UPDATE leave_entries SET removed_at = ?1, removed_by = ?2 WHERE id = ?3 AND removed_at IS NULL").bind(t, me.person.id, id).run();
+    return { ok: true };
+  }
+  let c;
+  try { c = cleanLeave(await readBody(req)); } catch (e) { if (e instanceof HttpError) throw e; throw new HttpError(400, e.message); }
+  await env.DB.batch([
+    env.DB.prepare("UPDATE leave_entries SET leave_type = ?1, start_date = ?2, end_date = ?3, note = ?4, updated_at = ?5, updated_by = ?6 WHERE id = ?7")
+      .bind(c.type, c.days[0].date, c.days[c.days.length - 1].date, c.note, t, me.person.id, id),
+    env.DB.prepare("DELETE FROM leave_days WHERE entry_id = ?1").bind(id),
+    ...c.days.map(d => env.DB.prepare("INSERT INTO leave_days (entry_id, work_date, hours) VALUES (?1, ?2, ?3)").bind(id, d.date, d.hours)),
+  ]);
+  return { ok: true };
+}
 const LEAVE_TYPES = ["sick", "annual", "bereavement"];
 const MAX_LEAVE_DAYS = 62;
 const isYmd = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v ?? "")) && !Number.isNaN(Date.parse(v + "T00:00:00Z"));
@@ -544,6 +574,11 @@ async function route(req, env) {
     const since = new Date(Date.now() - 60 * 86400_000).toISOString();
     return { requests: await listRequests(env, "a.person_id = ?1 AND a.created_at >= ?2", [me.person.id, since]) };
   }
+  if (path === "/api/my/fortnight" && m === "GET") {   // everything for the person's own fortnight PDF
+    const from = url.searchParams.get("from"), to = url.searchParams.get("to");
+    if (!isYmd(from) || !isYmd(to) || to < from || Date.parse(to) - Date.parse(from) > 31 * 86400_000) throw new HttpError(400, "Pick the fortnight.");
+    return adminPersonShifts(env, me.person.id, from, to);
+  }
   if (path === "/api/my/leave" && m === "GET") return { leave: await listLeave(env, me.person.id, nzDate(Date.now() - 60 * 86400_000)) };
   let mr = /^\/api\/my\/requests\/([0-9a-f-]{32,36})\/seen$/.exec(path);
   if (mr && m === "POST") {
@@ -566,6 +601,8 @@ async function route(req, env) {
         ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, updated_by = excluded.updated_by`).bind(d, now(), me.person.id).run();
       return getSettings(env);
     }
+    const lr = /^\/api\/admin\/leave\/([0-9a-f-]{32,36})$/.exec(path);
+    if (lr && ["GET", "PUT", "DELETE"].includes(m)) return adminLeave(req, env, me, lr[1], m);
     const pr = /^\/api\/admin\/people\/([0-9a-f]{32})\/shifts$/.exec(path);
     if (pr && m === "GET") {
       const from = url.searchParams.get("from"), to = url.searchParams.get("to");

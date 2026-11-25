@@ -18,6 +18,7 @@ This file records the brief and every decision the owner (Wade) makes, so work c
 - **25-11-2026:** Wade turned on GitHub Pages, added `SETUP_CODE` (as a Cloudflare secret) and set his PIN with it. **The app is live and in use.** Other people's PINs are set by admins in Manage people. Wade then decided: admins **can** approve their own requests, and the app keeps **following the phone's dark mode** (see below).
 - **25-11-2026:** Wade chose to change the **dashboard** before step 6: "Clocked in now" list + **View employees** → tap a name → that person's clocking history. Built, tested, migration 0006 applied live, Worker redeployed, app released (cache `nzcst-v3`). Step 6 (leave) is next.
 - **25-11-2026:** Wade said go on **step 6 (leave)**, then changed it mid-build: leave is a **record, not a request** (see "4. Leave"). Built, tested, migration 0007 applied live, Worker redeployed, app released (cache `nzcst-v4`). Step 7 (fortnightly PDF) is next.
+- **25-11-2026:** Wade set the fortnight start (**30-11-2026**, checked on the live database), asked for admins to edit/delete anyone's leave, and specified step 7 (download, not send). Built, tested, migration 0008 applied live, Worker redeployed, app released (cache `nzcst-v5`). Next: step 8 (try with a few staff, then everyone).
 
 ## Where things are
 
@@ -32,6 +33,7 @@ This file records the brief and every decision the owner (Wade) makes, so work c
 
 - `index.html`: the whole app (one file, no build step). Screens: **Who are you?** (name buttons), **PIN pad**, **No PIN yet**, **First-time setup**, **Home** (Today card for people who clock in, Admin card for admins), **My shifts** and **Fix a shift / Missed day**, **Dashboard**, **Employees**, **Employee history**, **Settings**, **Manage people** list, **Add / edit person**. `API` is at the top of the script (localhost uses `http://localhost:8787`).
 - `sw.js`: service worker, same approach as the forms apps (network first, `cache: "no-cache"`, offline fallback). Cache name `nzcst-vN`: **bump it on every release** in both `sw.js` and `preview/sw.js`. It only deletes its own old `nzcst-` caches, and the app asks it to re-save missing files each time it opens ("recache"), because the NZCS Forms and SFS Forms service workers currently delete every cache on wade-14.github.io when they update.
+- `vendor/jspdf.umd.min.js`, `vendor/jspdf.plugin.autotable.min.js`, `vendor/logo.js` (`window.NZCS_LOGO`): copied from NZCS Forms for the fortnight PDF; loaded only when a PDF is made.
 - `vendor/leaflet/`: Leaflet 1.9.4 (`leaflet.js`, `leaflet.css`, `LICENSE`; local copy, source-map line removed). Loaded only when an admin opens the dashboard.
 - `manifest.webmanifest`, `icon-*.png` (copied from NZCS Forms), `robots.txt`.
 - `preview/`: full copy of the app for testing. Same files.
@@ -61,6 +63,7 @@ This file records the brief and every decision the owner (Wade) makes, so work c
 - Step 5 was checked with 25 API tests (save, re-send harmless, finish before start / break outside / overlapping / missing finish / no reason / someone else's shift rejected, missed day needs job, open shift start-only, workers can't list, oldest first, original kept, approve updates shift, can't decide twice, missed day becomes a shift on the right date, decline changes nothing, worker sees outcome + note + who, seen, dashboard shows original) and a two-phone browser run: Ruby fixes yesterday's finish + adds a break (form checks, live totals), then adds a missed day **with no signal** (Waiting to sync → synced); Sam sees "2 to approve", Now vs Asked for, approves one with a note and declines the other; dashboard shows Adjusted / was / approved by; Ruby gets both outcome boxes, OK clears them (stays cleared), her shift shows Adjusted with the new times. No errors.
 - Dashboard redesign was checked with 5 API tests (default fortnight start, workers can't change settings or read someone's history, Sam can, max range) and a phone-sized browser run as Sam: Clocked in now shows only the 3 people on site/on break, day view gone, today's map (4 pins), tapping a name opens their history, View employees lists the 12 who clock in, Nigel's fortnight (clocked in now, "not set yet" note, can't go forward, previous fortnight totals, Back to this fortnight), Settings saved → fortnights start on the new day. Fixed two bugs found while testing: the history map didn't re-zoom when switching person, and the previous person's details showed briefly while the next loaded. No errors.
 - Step 6 was checked with 15 API tests (record, re-send harmless, bad type / no days / 0 or 25 hours / same day twice rejected, Sam can't, not in approvals, worker's list, straight onto the fortnight history, can't remove someone else's, remove own → gone from history and list) plus the 25 step-5 tests again, and a two-phone browser run: Ruby records Thu 8h + Fri 4h sick leave **with no signal** (type required, 12h total, Waiting to sync → On your timesheet, days show Sick leave), records annual by mistake and removes it; Sam has nothing to approve and sees Thu/Fri sick leave and "Sick leave 12h" on Ruby's fortnight. Found and fixed: on a narrow phone the leave form (and the fix-a-shift time boxes) spilled off the right edge. No errors.
+- Step 7 was checked with 13 API tests (fortnight start saved, workers can't open/edit others' leave, admin opens/edits/deletes leave, bad edit refused, worker's list shows the admin's change, own-fortnight data, too-long range refused) and a two-phone browser run: Nigel downloads his fortnight (file name, email prompt mailto to admin@nzconservation.nz, PDF text checked with pdftotext: heading, open shift flagged, adjusted shift marked, totals, empty days, no location), Last fortnight dates; Sam edits Ruby's leave (type + hours) and deletes it, downloads Nigel's and Ruby's PDFs (sick leave rows and 12h total). No errors.
 - The test scripts aren't in the repo. Note: a scripted Clock Out now needs the jobs box filled in first.
 
 ## Sister apps (same owner, same setup)
@@ -206,7 +209,8 @@ How step 6 works (built 25-11-2026; details chosen by Claude, tell Wade if any n
 - **My shifts** has **+ Record leave** (next to + Add a missed day) → `#leave`. The form starts with an amber note: "This doesn't ask for leave. Sort it out with your manager by phone or text first, then put it here so it's on your timesheet."
 - Type (big Sick / Annual / Bereavement buttons), **First day** and **Last day** (today by default; any date, past or future), then **Hours each day**: 8 unless changed (e.g. 4 for half a day); **weekends start at 0** in a range (can be changed); days left at 0 aren't recorded. Days + total hours shown. Optional note. **Save leave**. Up to 62 days at once.
 - Saved on the phone and synced like taps (queue type `leave`), so it works with no signal. **My leave** card on My shifts lists each entry ("Waiting to sync" / "On your timesheet") with **Remove** (asks first; type `leave_remove`; the entry is kept on the server marked removed, not deleted). The last-14-days list shows leave on each day ("Sick leave 8h").
-- **Admins:** each person's fortnight history shows leave on each day ("Sick leave 8h · <note>"), including days with no shifts and future days already recorded in that fortnight; **Fortnight totals** add hours for each leave type. Leave is not on the dashboard and not in Waiting for approval. Admins can't edit or remove someone's leave in the app (not asked for).
+- **Admins:** each person's fortnight history shows leave on each day ("Sick leave 8h · <note>"), including days with no shifts and future days already recorded in that fortnight; **Fortnight totals** add hours for each leave type. Leave is not on the dashboard and not in Waiting for approval.
+- **Admins can edit and delete anyone's leave (Wade, 25-11-2026).** Each leave line on the employee history has **Edit** (`#lvedit-<id>`: the same leave form, titled "Edit leave · <name>", without the "doesn't ask for leave" note; **Save changes** goes straight to the server, needs signal) and **Delete** (asks first; deletes the whole entry, kept on the server marked removed). Who changed/removed it is stored (`updated_by`, `removed_by`; `worker/migrations/0008_leave_admin.sql`). API: `GET/PUT/DELETE /api/admin/leave/<id>`. The worker's phone picks up the change on its next sync.
 - Sam (no clock-in) can't record leave. Admins who clock in can.
 - Database: `leave_entries` (person, type, first/last day, note, entered_at, removed_at) + `leave_days` (entry, date, hours) — `worker/migrations/0007_leave.sql`. API: sync types `leave` and `leave_remove`; `GET /api/my/leave` (last 60 days + future); `GET /api/admin/people/<id>/shifts` returns `leave` days. Phone storage adds `nzcst.leave.<person>`.
 
@@ -231,9 +235,16 @@ How the dashboard works now (built 25-11-2026; details chosen by Claude, tell Wa
 
 ### 6. Fortnightly timesheet PDF
 - One PDF per worker per fortnight: each day's clock in/out, breaks, total hours and jobs; leave by type and hours; approved adjustments marked as adjusted; fortnight totals (hours worked + hours of each leave type).
-- Workers have a **"Send my fortnight"** button that sends the PDF to the admin/payroll person (Sam).
+- ~~Workers have a "Send my fortnight" button that sends the PDF to Sam.~~ **Changed (Wade, 25-11-2026):** no "Send my fortnight" and no sending from the app/Gmail. Instead **"Download my fortnight (PDF)"**, then a prompt to send it themselves by email to **admin@nzconservation.nz**.
 - Admins (including Sam) can download any worker's PDF for any fortnight.
-- **Fortnight start date:** a setting. Wade (24-11-2026): not decided yet, set it later. The Settings screen for it exists since 25-11-2026; Wade hasn't set it yet.
+- **Fortnight start date:** **30-11-2026** (Wade set it in Settings on 25-11-2026; fortnights run every 14 days from it, so the one before is 16-11 to 29-11).
+
+How step 7 works (built 25-11-2026; details chosen by Claude, tell Wade if any need changing):
+
+- **Workers:** top of **My shifts**, card **Fortnight timesheet**: **This fortnight / Last fortnight**, the dates, **Download my fortnight (PDF)**. It syncs first; if anything is still waiting to sync, or there's no signal, it says so and doesn't make the PDF (so it's never missing entries). Data from `GET /api/my/fortnight?from=&to=`. After the download a green box **"Now email it to Sam"**: address `admin@nzconservation.nz` (`PAYROLL_EMAIL` in index.html), **Email the PDF** (phone share menu with the PDF attached; only on phones that support sharing files), **Open email** (mailto to that address with subject "Timesheet - <name> - <dates>" and a short body; they attach the downloaded PDF) and **Copy address**.
+- **Admins:** **Download PDF timesheet** button under Fortnight totals on each employee's history (the fortnight being viewed).
+- **The PDF** (jsPDF, A4, made on the phone): NZCS logo, "Timesheet", name, "Fortnight <first day> to <last day>", "NZ Conservation Services Ltd". A table with **every day of the fortnight**: Day | In | Out | Breaks | Hours | Job / where; one row per shift; leave rows ("Sick leave - <note>", hours); days with nothing say "No shifts". Adjusted times have **\*** and the job cell says "\* Adjusted, approved by <name>" ("missed day added" for missed days). A shift with no clock-out shows "Not clocked out", isn't counted, and a red line at the top says how many. **Fortnight totals**: Hours worked, Breaks (not counted), each leave type, **Total (worked + leave)**, all as "h m (decimal)". Footer: made date/time and by whom, page numbers. **No locations.** File name `NZCS Timesheet - <name> - <dd-mm-yyyy> to <dd-mm-yyyy>.pdf`.
+- No `timesheet_submissions` table: nothing is sent from the app, so there's nothing to track.
 
 ### Offline (required)
 - Clocking, breaks, jobs, leave requests and adjustment requests save on the phone immediately and sync automatically when signal returns.
@@ -252,8 +263,7 @@ How the dashboard works now (built 25-11-2026; details chosen by Claude, tell Wa
 - Jobs text ✅ is on `shifts` (`jobs`, `jobs_at`; step 3).
 - `adjustments` ✅ (step 5; covers both fixes and missed days). In-app notification uses `adjustments.seen_at`, so no separate `notifications` table so far.
 - `leave_entries` ✅ + `leave_days` ✅ (step 6; records, no approval/status).
-- `timesheet_submissions`: person, fortnight, sent at.
-- `notifications`: in-app messages (e.g. "your adjustment was approved").
+- ~~`timesheet_submissions`~~ not needed (PDFs are downloaded and emailed by the person, not sent from the app). ~~`notifications`~~ not needed (outcome boxes use `adjustments.seen_at`).
 - `settings` ✅ (fortnight start date; built with the dashboard redesign).
 
 ## Build order (from the brief)
@@ -264,14 +274,13 @@ How the dashboard works now (built 25-11-2026; details chosen by Claude, tell Wa
 4. Admin dashboard (live status and daily hours). ✅ built 25-11-2026, not deployed yet (approvals list added in steps 5–6)
 5. Adjustment requests and approvals. ✅ built and live 25-11-2026
 6. Leave. ✅ built and live 25-11-2026 (records, no approval: Wade's change)
-7. Fortnightly PDF and sending it. ← next
-8. Test with a few staff, then roll out to everyone.
+7. Fortnightly PDF (download + email prompt). ✅ built and live 25-11-2026
+8. Test with a few staff, then roll out to everyone. ← next
 
 ## Open questions (to ask when we reach that step)
 
 - (Answered 25-11-2026: forgot to clock in → clock in late + adjust start; missed day → missed-day request. Times are locked once recorded; every change goes through a request.)
-- "Send my fortnight": email to Sam, in-app, or both?
-- Fortnight start date.
+- (Answered 25-11-2026: no sending; download + email prompt to admin@nzconservation.nz. Fortnight start 30-11-2026.)
 
 ## Working rules
 
