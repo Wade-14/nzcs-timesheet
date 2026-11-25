@@ -15,7 +15,7 @@ This file records the brief and every decision the owner (Wade) makes, so work c
 - **25-11-2026:** Wade changed step 3 to one jobs answer **per shift**, then said move on to **step 4 (admin dashboard)**. Both built and tested locally. Still not deployed.
 - **25-11-2026:** Wade asked for a live version to install on his phone. **Cloudflare done by Claude:** D1 database `nzcs-timesheet` created (Oceania, id in `wrangler.toml`), migrations 0001–0004 applied (13 people, 5 admins, no PINs), Worker deployed and answering at the API address (checked health, names, CORS for wade-14.github.io). **Waiting on Wade:** add the `SETUP_CODE` secret, turn on GitHub Pages (Claude can't: the session's GitHub proxy blocks the Pages API).
 - **25-11-2026:** Wade said proceed with **step 5 (adjustments)** and answered the open question (below). Built, tested, migration 0005 applied to the live database, Worker redeployed, app released (cache `nzcst-v2`).
-- **25-11-2026:** Wade turned on GitHub Pages, added `SETUP_CODE` (as a Cloudflare secret) and set his PIN with it. **The app is live and in use.** Other people's PINs are set by admins in Manage people. Open: should admins be blocked from approving their own requests? Should the app always use the light theme (it follows the phone's dark mode now)?
+- **25-11-2026:** Wade turned on GitHub Pages, added `SETUP_CODE` (as a Cloudflare secret) and set his PIN with it. **The app is live and in use.** Other people's PINs are set by admins in Manage people. Wade then decided: admins **can** approve their own requests, and the app keeps **following the phone's dark mode** (see below).
 
 ## Where things are
 
@@ -186,7 +186,7 @@ How step 5 works (built 25-11-2026; details chosen by Claude, tell Wade if any n
 - **Fix a shift** (`#fix-<id>`): starts with the shift's current start, finish, breaks (add / ✕ remove) and job text, plus a required **Reason for the change**. Live Worked / Breaks totals. A finish (or break) time earlier than the start counts as the next day. Checks: finish after start, max 24 h, nothing in the future, breaks inside the shift and not overlapping, job filled in, something actually changed. **Still clocked in:** only the start time can be fixed (clock out as normal on Home).
 - **Missed day** (`#missed`): date (not in the future), start, finish, breaks, job/where, reason; all required except breaks.
 - Requests save on the phone and sync like taps (queue type `adjust`), so they work with no signal.
-- **Admins (including Sam):** Home's Dashboard button shows "N to approve". The dashboard's top card **Waiting for approval** lists them oldest first: name, Fix a shift / Missed day, date, when sent, a **Now vs Asked for** table (start, finish, breaks, worked hours, job; changes in bold green), reason, optional note, **Approve** / **Decline**. Any admin can decide any request (including their own: not blocked; ask Wade if he wants that).
+- **Admins (including Sam):** Home's Dashboard button shows "N to approve". The dashboard's top card **Waiting for approval** lists them oldest first: name, Fix a shift / Missed day, date, when sent, a **Now vs Asked for** table (start, finish, breaks, worked hours, job; changes in bold green), reason, optional note, **Approve** / **Decline**. Any admin can decide any request, **including their own (Wade, 25-11-2026: "let admins still fix their own days")**.
 - **Approve** changes the shift (start, finish, breaks replaced, job) and marks it **Adjusted**; a missed day becomes a new shift (no location; not flagged as "no location"). **Decline** changes nothing. Either way the request keeps the original and the requested values forever (audit trail). The dashboard's day view shows adjusted shifts as "Adjusted · approved by <name>", "Was <times>. Reason: …".
 - **Worker notified:** green "✓ Approved" / red "✗ Declined" box on Home (who decided, any note) until they tap OK.
 - Database: `adjustments` (kind shift|day, original + requested JSON, reason, status, reviewer, note, seen) and `shifts.adjusted` (`worker/migrations/0005_adjustments.sql`). API: sync type `adjust`; `GET /api/my/requests`, `POST /api/my/requests/<id>/seen`; `GET /api/admin/requests` (pending; `?status=recent` for the last 30 days decided), `POST /api/admin/requests/<id>` {decision: approve|decline, note}. The phone now keeps 14 days of shifts. Phone storage adds `nzcst.reqs.<person>` and `nzcst.seenReqs`.
@@ -228,6 +228,7 @@ How step 4 works (built 25-11-2026; details chosen by Claude, tell Wade if any n
 ### Design
 - Very simple. Usable with gloves on, outdoors, in bright sunlight: large buttons, high contrast.
 - NZ date format (dd-mm-yyyy), NZ timezone (Pacific/Auckland), NZ English.
+- **Dark mode (Wade, 25-11-2026):** the app follows the phone's light/dark setting (CSS `prefers-color-scheme`), so people who use dark mode get the dark theme. Don't force light.
 
 ## Planned database (D1, draft)
 
