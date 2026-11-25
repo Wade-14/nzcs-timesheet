@@ -15,12 +15,13 @@ This file records the brief and every decision the owner (Wade) makes, so work c
 - **25-11-2026:** Wade changed step 3 to one jobs answer **per shift**, then said move on to **step 4 (admin dashboard)**. Both built and tested locally. Still not deployed.
 - **25-11-2026:** Wade asked for a live version to install on his phone. **Cloudflare done by Claude:** D1 database `nzcs-timesheet` created (Oceania, id in `wrangler.toml`), migrations 0001–0004 applied (13 people, 5 admins, no PINs), Worker deployed and answering at the API address (checked health, names, CORS for wade-14.github.io). **Waiting on Wade:** add the `SETUP_CODE` secret, turn on GitHub Pages (Claude can't: the session's GitHub proxy blocks the Pages API).
 - **25-11-2026:** Wade said proceed with **step 5 (adjustments)** and answered the open question (below). Built, tested, migration 0005 applied to the live database, Worker redeployed, app released (cache `nzcst-v2`).
+- **25-11-2026:** Wade turned on GitHub Pages, added `SETUP_CODE` (as a Cloudflare secret) and set his PIN with it. **The app is live and in use.** Other people's PINs are set by admins in Manage people. Open: should admins be blocked from approving their own requests? Should the app always use the light theme (it follows the phone's dark mode now)?
 
 ## Where things are
 
 | What | Where |
 |---|---|
-| Live app | https://wade-14.github.io/nzcs-timesheet/ (once GitHub Pages is on) |
+| Live app | https://wade-14.github.io/nzcs-timesheet/ (live since 25-11-2026) |
 | Preview (test changes here first) | https://wade-14.github.io/nzcs-timesheet/preview/ |
 | API (Cloudflare Worker) | https://nzcs-timesheet-api.royal-dawn-9e17.workers.dev (deployed 25-11-2026) |
 | Hosting | GitHub Pages from `main`, repo root |
@@ -43,9 +44,9 @@ This file records the brief and every decision the owner (Wade) makes, so work c
 ## Going live (first time)
 
 1. ✅ (25-11-2026) Cloudflare: create D1 database `nzcs-timesheet` (Oceania), put its id in `worker/wrangler.toml`, apply migrations (`npx wrangler d1 migrations apply nzcs-timesheet --remote`), deploy the Worker. The Cloudflare token is in the session environment **"nzcs-chargeout"** (proxy-injected for api.cloudflare.com); this session must be on that environment to deploy (it also allows the timesheet Worker's host, added 25-11-2026, so sessions can test the live API). New migrations: `npx wrangler d1 migrations apply nzcs-timesheet --remote` before deploying. Deploy command: `cd worker && WRANGLER_SEND_METRICS=false CLOUDFLARE_API_TOKEN=proxy-injected CLOUDFLARE_ACCOUNT_ID=dc50d269d55490062b7b588156ed2fa1 npx wrangler deploy`.
-2. Wade adds the secret **`SETUP_CODE`** himself in the Cloudflare dashboard (Worker → Settings → Variables and Secrets), so it never passes through a chat or the repo.
-3. GitHub: Settings → Pages → Deploy from branch `main`, folder `/ (root)`.
-4. Wade logs in once with the setup code to set his own PIN, then sets everyone else's from Manage people.
+2. ✅ (25-11-2026) Wade adds the secret **`SETUP_CODE`** himself in the Cloudflare dashboard (Worker → Settings → Variables and Secrets), so it never passes through a chat or the repo.
+3. ✅ (25-11-2026) GitHub: Settings → Pages → Deploy from branch `main`, folder `/ (root)`.
+4. ✅ (25-11-2026) Wade logs in once with the setup code to set his own PIN, then sets everyone else's from Manage people.
 
 ## Testing
 
