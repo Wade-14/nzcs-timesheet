@@ -507,7 +507,7 @@ async function pushNotices(req, env) {
   const sub = await env.DB.prepare(
     `SELECT s.*, p.role, p.active FROM push_subs s JOIN people p ON p.id = s.person_id WHERE s.endpoint = ?1`).bind(String(b.endpoint ?? "").slice(0, 1000)).first();
   if (!sub || sub.role !== "admin" || !sub.active) throw new HttpError(403, "Not signed up for alerts.");
-  const since = sub.last_fetch && sub.last_fetch > new Date(Date.now() - 2 * 86400_000).toISOString() ? sub.last_fetch : new Date(Date.now() - 15 * 60000).toISOString();
+  const since = sub.last_fetch && sub.last_fetch > new Date(Date.now() - NOTICE_DAYS * 86400_000).toISOString() ? sub.last_fetch : new Date(Date.now() - 15 * 60000).toISOString();
   const { results } = await env.DB.prepare(
     `SELECT id, title, body, url, created_at FROM notices WHERE created_at > ?1 AND (exclude_person IS NULL OR exclude_person != ?2)
       ORDER BY created_at LIMIT 5`).bind(since, sub.person_id).all();
@@ -710,7 +710,26 @@ export default {
     }
   },
   async scheduled(_event, env) {
-    await env.DB.prepare("DELETE FROM sessions WHERE expires_at < ?1").bind(now()).run();
-    await env.DB.prepare("DELETE FROM notices WHERE created_at < ?1").bind(new Date(Date.now() - 2 * 86400_000).toISOString()).run();
+    await tidyUp(env);
   },
 };
+
+/* ---------- Daily tidy-up (cron ~3am NZ) ----------
+   Wade, 25-11-2026: keep timesheet records for 7 years, then delete them; keep alert messages for 7 days. */
+const KEEP_YEARS = 7;
+const NOTICE_DAYS = 7;
+async function tidyUp(env) {
+  const cut = new Date(); cut.setUTCFullYear(cut.getUTCFullYear() - KEEP_YEARS);
+  const cutoff = nzDate(cut);   // records for NZ days before this date go
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM sessions WHERE expires_at < ?1").bind(now()),
+    env.DB.prepare("DELETE FROM notices WHERE created_at < ?1").bind(new Date(Date.now() - NOTICE_DAYS * 86400_000).toISOString()),
+    // Shifts more than 7 years old, with their breaks and any requests about them
+    env.DB.prepare("DELETE FROM breaks WHERE shift_id IN (SELECT id FROM shifts WHERE work_date < ?1)").bind(cutoff),
+    env.DB.prepare("DELETE FROM adjustments WHERE work_date < ?1 OR shift_id IN (SELECT id FROM shifts WHERE work_date < ?1)").bind(cutoff),
+    env.DB.prepare("DELETE FROM shifts WHERE work_date < ?1").bind(cutoff),
+    // Leave: days more than 7 years old, then entries with no days left
+    env.DB.prepare("DELETE FROM leave_days WHERE work_date < ?1").bind(cutoff),
+    env.DB.prepare("DELETE FROM leave_entries WHERE end_date < ?1 AND id NOT IN (SELECT entry_id FROM leave_days)").bind(cutoff),
+  ]);
+}
