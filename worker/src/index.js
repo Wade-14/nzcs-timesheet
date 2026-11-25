@@ -399,14 +399,8 @@ async function shiftsFor(env, personId, fromDate) {
   return withBreaks(env, results);
 }
 
-// Admin dashboard: everyone who clocks in, their shifts on one NZ day, anything still open, and when their phone last synced.
-async function adminDay(env, date) {
-  const { results: people } = await env.DB.prepare(
-    `SELECT * FROM people WHERE (clocks_in = 1 AND active = 1) OR id IN (SELECT person_id FROM shifts WHERE work_date = ?1)
-     ORDER BY first_name COLLATE NOCASE, last_name COLLATE NOCASE`).bind(date).all();
-  const { results: rows } = await env.DB.prepare(
-    `SELECT * FROM shifts WHERE work_date = ?1 OR clock_out_at IS NULL ORDER BY clock_in_at`).bind(date).all();
-  const shifts = await withBreaks(env, rows);
+// Adds what an adjusted shift was before, and who approved it.
+async function attachAdjustments(env, shifts) {
   const adjustedIds = shifts.filter(s => s.adjusted).map(s => s.id).slice(0, 90);   // D1 bound-value limit
   if (adjustedIds.length) {
     const { results } = await env.DB.prepare(
@@ -418,6 +412,35 @@ async function adminDay(env, date) {
         reason: mine[mine.length - 1].reason, approved_by: mine[mine.length - 1].by, count: mine.length };
     }
   }
+}
+
+const DEFAULT_FORTNIGHT_START = "2026-11-16";   // a Monday; used until an admin sets the real one
+async function getSettings(env) {
+  const { results } = await env.DB.prepare("SELECT key, value FROM settings").all();
+  const m = Object.fromEntries(results.map(r => [r.key, r.value]));
+  return { fortnight_start: m.fortnight_start || DEFAULT_FORTNIGHT_START, fortnight_start_set: !!m.fortnight_start };
+}
+
+// One person's shifts between two NZ dates (inclusive), for the admin "employee history" page.
+async function adminPersonShifts(env, id, from, to) {
+  const p = await getPerson(env, id);
+  const { results } = await env.DB.prepare(
+    "SELECT * FROM shifts WHERE person_id = ?1 AND work_date >= ?2 AND work_date <= ?3 ORDER BY clock_in_at").bind(p.id, from, to).all();
+  const shifts = await withBreaks(env, results);
+  await attachAdjustments(env, shifts);
+  const open = await env.DB.prepare("SELECT id FROM shifts WHERE person_id = ?1 AND clock_out_at IS NULL LIMIT 1").bind(p.id).first();
+  return { person: { ...publicPerson(p), last_sync: p.last_sync_at || null, clocked_in: !!open }, from, to, shifts };
+}
+
+// Admin dashboard: everyone who clocks in, their shifts on one NZ day, anything still open, and when their phone last synced.
+async function adminDay(env, date) {
+  const { results: people } = await env.DB.prepare(
+    `SELECT * FROM people WHERE (clocks_in = 1 AND active = 1) OR id IN (SELECT person_id FROM shifts WHERE work_date = ?1)
+     ORDER BY first_name COLLATE NOCASE, last_name COLLATE NOCASE`).bind(date).all();
+  const { results: rows } = await env.DB.prepare(
+    `SELECT * FROM shifts WHERE work_date = ?1 OR clock_out_at IS NULL ORDER BY clock_in_at`).bind(date).all();
+  const shifts = await withBreaks(env, rows);
+  await attachAdjustments(env, shifts);
   return {
     date, today: nzDate(Date.now()), server_time: now(),
     people: people.map(p => ({
@@ -458,6 +481,7 @@ async function route(req, env) {
     return { shifts: await shiftsFor(env, me.person.id, fromDate), today: nzDate(Date.now()) };   // phone asks for 14 days
   }
 
+  if (path === "/api/settings" && m === "GET") return getSettings(env);
   if (path === "/api/my/requests" && m === "GET")
     return { requests: await listRequests(env, "a.person_id = ?1 AND a.created_at >= ?2", [me.person.id, new Date(Date.now() - 60 * 86400_000).toISOString()]) };
   let mr = /^\/api\/my\/requests\/([0-9a-f-]{32,36})\/seen$/.exec(path);
@@ -472,6 +496,21 @@ async function route(req, env) {
       if (url.searchParams.get("status") === "recent")
         return { requests: (await listRequests(env, "a.status != 'pending' AND a.reviewed_at >= ?1", [new Date(Date.now() - 30 * 86400_000).toISOString()])) };
       return { requests: (await listRequests(env, "a.status = 'pending'", [])).reverse() };   // oldest first
+    }
+    if (path === "/api/admin/settings" && m === "PUT") {
+      const b = await readBody(req);
+      const d = String(b.fortnight_start ?? "");
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || Number.isNaN(Date.parse(d + "T00:00:00Z"))) throw new HttpError(400, "Pick a date for the fortnight start.");
+      await env.DB.prepare(`INSERT INTO settings (key, value, updated_at, updated_by) VALUES ('fortnight_start', ?1, ?2, ?3)
+        ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, updated_by = excluded.updated_by`).bind(d, now(), me.person.id).run();
+      return getSettings(env);
+    }
+    const pr = /^\/api\/admin\/people\/([0-9a-f]{32})\/shifts$/.exec(path);
+    if (pr && m === "GET") {
+      const from = url.searchParams.get("from"), to = url.searchParams.get("to");
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(from || "") || !/^\d{4}-\d{2}-\d{2}$/.test(to || "") || to < from) throw new HttpError(400, "Pick the dates to show.");
+      if (Date.parse(to) - Date.parse(from) > 62 * 86400_000) throw new HttpError(400, "That's too many days at once.");
+      return adminPersonShifts(env, pr[1], from, to);
     }
     const dr = /^\/api\/admin\/requests\/([0-9a-f-]{32,36})$/.exec(path);
     if (dr && m === "POST") return decideRequest(req, env, me, dr[1]);

@@ -16,6 +16,7 @@ This file records the brief and every decision the owner (Wade) makes, so work c
 - **25-11-2026:** Wade asked for a live version to install on his phone. **Cloudflare done by Claude:** D1 database `nzcs-timesheet` created (Oceania, id in `wrangler.toml`), migrations 0001–0004 applied (13 people, 5 admins, no PINs), Worker deployed and answering at the API address (checked health, names, CORS for wade-14.github.io). **Waiting on Wade:** add the `SETUP_CODE` secret, turn on GitHub Pages (Claude can't: the session's GitHub proxy blocks the Pages API).
 - **25-11-2026:** Wade said proceed with **step 5 (adjustments)** and answered the open question (below). Built, tested, migration 0005 applied to the live database, Worker redeployed, app released (cache `nzcst-v2`).
 - **25-11-2026:** Wade turned on GitHub Pages, added `SETUP_CODE` (as a Cloudflare secret) and set his PIN with it. **The app is live and in use.** Other people's PINs are set by admins in Manage people. Wade then decided: admins **can** approve their own requests, and the app keeps **following the phone's dark mode** (see below).
+- **25-11-2026:** Wade chose to change the **dashboard** before step 6: "Clocked in now" list + **View employees** → tap a name → that person's clocking history. Built, tested, migration 0006 applied live, Worker redeployed, app released (cache `nzcst-v3`). Step 6 (leave) is next.
 
 ## Where things are
 
@@ -28,7 +29,7 @@ This file records the brief and every decision the owner (Wade) makes, so work c
 
 ## Files
 
-- `index.html`: the whole app (one file, no build step). Screens: **Who are you?** (name buttons), **PIN pad**, **No PIN yet**, **First-time setup**, **Home** (Today card for people who clock in, Admin card for admins), **Manage people** list, **Add / edit person**. `API` is at the top of the script (localhost uses `http://localhost:8787`).
+- `index.html`: the whole app (one file, no build step). Screens: **Who are you?** (name buttons), **PIN pad**, **No PIN yet**, **First-time setup**, **Home** (Today card for people who clock in, Admin card for admins), **My shifts** and **Fix a shift / Missed day**, **Dashboard**, **Employees**, **Employee history**, **Settings**, **Manage people** list, **Add / edit person**. `API` is at the top of the script (localhost uses `http://localhost:8787`).
 - `sw.js`: service worker, same approach as the forms apps (network first, `cache: "no-cache"`, offline fallback). Cache name `nzcst-vN`: **bump it on every release** in both `sw.js` and `preview/sw.js`. It only deletes its own old `nzcst-` caches, and the app asks it to re-save missing files each time it opens ("recache"), because the NZCS Forms and SFS Forms service workers currently delete every cache on wade-14.github.io when they update.
 - `vendor/leaflet/`: Leaflet 1.9.4 (`leaflet.js`, `leaflet.css`, `LICENSE`; local copy, source-map line removed). Loaded only when an admin opens the dashboard.
 - `manifest.webmanifest`, `icon-*.png` (copied from NZCS Forms), `robots.txt`.
@@ -57,6 +58,7 @@ This file records the brief and every decision the owner (Wade) makes, so work c
 - Step 3 was checked with 5 API tests (two shifts each with their own text, newest edit wins even if an older one arrives later, can't write on someone else's shift, 2000-character limit) and a phone-sized browser run: box hidden before clock-in, Wade's wording, Clock Out blocked when empty or only spaces, then **with no signal** typed and clocked out straight away, edited again (still one queued entry), reopened the app (text kept), clocked in again (new empty box, "For your shift from…", first answer shown in the list, Clock Out blocked until filled); signal back → server had both shifts with their own text. Steps 1–2 tests still pass. No errors.
 - Step 4 was checked with 8 API tests (workers get 403, Sam can read it, Sam isn't listed as a worker, open break, shift left open from yesterday shows as open but in yesterday's hours, last sync time, never-synced phone) and a phone-sized browser run as Sam with a sample day: summary counts, on-site first, "forgot to clock out?" flag, hours/breaks/jobs per shift, missing jobs and location-off flags, 4 map pins + "No location recorded" list, Show on map, previous day / Back to today / can't go past today; a worker going to `#dash` stays on Home. Map tiles were mocked (no internet in the test browser). No errors.
 - Step 5 was checked with 25 API tests (save, re-send harmless, finish before start / break outside / overlapping / missing finish / no reason / someone else's shift rejected, missed day needs job, open shift start-only, workers can't list, oldest first, original kept, approve updates shift, can't decide twice, missed day becomes a shift on the right date, decline changes nothing, worker sees outcome + note + who, seen, dashboard shows original) and a two-phone browser run: Ruby fixes yesterday's finish + adds a break (form checks, live totals), then adds a missed day **with no signal** (Waiting to sync → synced); Sam sees "2 to approve", Now vs Asked for, approves one with a note and declines the other; dashboard shows Adjusted / was / approved by; Ruby gets both outcome boxes, OK clears them (stays cleared), her shift shows Adjusted with the new times. No errors.
+- Dashboard redesign was checked with 5 API tests (default fortnight start, workers can't change settings or read someone's history, Sam can, max range) and a phone-sized browser run as Sam: Clocked in now shows only the 3 people on site/on break, day view gone, today's map (4 pins), tapping a name opens their history, View employees lists the 12 who clock in, Nigel's fortnight (clocked in now, "not set yet" note, can't go forward, previous fortnight totals, Back to this fortnight), Settings saved → fortnights start on the new day. Fixed two bugs found while testing: the history map didn't re-zoom when switching person, and the previous person's details showed briefly while the next loaded. No errors.
 - The test scripts aren't in the repo. Note: a scripted Clock Out now needs the jobs box filled in first.
 
 ## Sister apps (same owner, same setup)
@@ -204,21 +206,23 @@ How step 5 works (built 25-11-2026; details chosen by Claude, tell Wade if any n
 - Map (OpenStreetMap) of where each worker clocked in and out.
 - Manage workers (add, deactivate, reset PIN).
 
-How step 4 works (built 25-11-2026; details chosen by Claude, tell Wade if any need changing):
+**Dashboard redesign (Wade, 25-11-2026):** "I want a list of who's clocked in currently, and then an option where you can view employees: tap on someone's name, e.g. Gareth Coyle, and see their previous clocking history." Wade's choices: remove the day-by-day Hours view but **keep today's map** on the dashboard; history shown **by fortnight**.
 
-- Admins (including Sam) get a **Dashboard** button on the Admin card (`#dash`). Workers can't open it (the API returns 403).
-- **One day at a time:** ‹ › arrows move between days (not past today), "Back to today" when on another day. Needs signal (reads straight from the server, `GET /api/admin/day?date=yyyy-mm-dd`). Refreshes every 30 seconds while showing today.
-- **Right now** (today only): counts (on site / on break / clocked out / not in), then a row per active person who clocks in, sorted on site → on break → clocked out → not in, with "since 7:02am" and **"Phone last synced <time>"** (or "Phone hasn't synced yet"), so admins can tell when someone's phone has been out of signal. Someone still clocked in from an earlier day shows amber "On site since <day> <time> (forgot to clock out?)". A note says it only shows what phones have sent.
-- **Hours** for the day: a card per person who worked: total worked and breaks, then each shift (times, "(next day)" if it ended after midnight, breaks, that shift's jobs text or "Jobs not filled in yet" / "No jobs entered", amber flags "No location at Clock In / Clock Out (location turned off / no GPS fix)"), and **Show on map**. Then "No shifts: …" for everyone else.
-- **Map** (Leaflet + OpenStreetMap tiles, credit shown): green pins = Clock In, red = Clock Out, tap for name, time and accuracy. Zooms to the day's pins when the day changes (not on each refresh, so panning isn't undone); Southland when there are none. Under it, "No location recorded" lists each clock in/out without a location. Location is never on the PDF.
+How the dashboard works now (built 25-11-2026; details chosen by Claude, tell Wade if any need changing):
+
+- Admins (including Sam) get **Dashboard**, **Manage people** and **Settings** on the Admin card. Workers can't open any of them (the API returns 403). Everything here needs signal.
+- **Dashboard** (`#dash`, refreshes every 30 seconds): **Waiting for approval** (step 5), then **Clocked in now (N)**: only people on site or on break, sorted on site → on break, each with "since 7:02am · Phone last synced <time>" (someone still clocked in from an earlier day shows amber "On site since <day> <time> (forgot to clock out?)"); "Nobody is clocked in right now" when empty. Tapping a name opens their history. Then **View employees**, then **Today's clock in and out locations** map (green = Clock In, red = Clock Out, tap for name/time/accuracy; "No location recorded" list under it). Data from `GET /api/admin/day` (today).
+- **View employees** (`#staff`): everyone who clocks in (not Sam), active first, with an On site / On break tag; turned-off logins at the bottom marked "Turned off" (their history is still viewable).
+- **Employee history** (`#emp-<id>`): name, "Clocked in now · Phone last synced …"; **one fortnight at a time** with ‹ › (not into the future) and "Back to this fortnight"; **Fortnight totals** (worked, breaks, days worked); **Days** newest first: each day worked with its total and each shift (times + hours, "(next day)", breaks, job text or "Jobs not filled in yet" / "No jobs entered", location flags, Adjusted / was / approved by), days with nothing as a thin "No shifts" line; then a **map of that fortnight's clock in/out pins**. `GET /api/admin/people/<id>/shifts?from=&to=` (max 62 days).
+- **Settings** (`#settings`): **Fortnight starts on** (any first day of a pay fortnight; fortnights repeat every 14 days before and after it). Until it's set, fortnights start on Mondays (from 16-11-2026) and the history page says so. Stored in the `settings` table (`worker/migrations/0006_settings.sql`); `GET /api/settings` (anyone logged in), `PUT /api/admin/settings` {fortnight_start}. The PDF (step 7) will use the same fortnights.
 - Last sync time is stored on `people.last_sync_at` (set when a phone's sync saves anything; `worker/migrations/0004_last_sync.sql`).
-- **Not yet:** the "waiting for approval" list (adjustments, step 5; leave, step 6) and leave on the day view (step 6) get added to the dashboard in those steps.
+- **Not yet:** leave requests in "Waiting for approval" and leave on the employee history (step 6).
 
 ### 6. Fortnightly timesheet PDF
 - One PDF per worker per fortnight: each day's clock in/out, breaks, total hours and jobs; leave by type and hours; approved adjustments marked as adjusted; fortnight totals (hours worked + hours of each leave type).
 - Workers have a **"Send my fortnight"** button that sends the PDF to the admin/payroll person (Sam).
 - Admins (including Sam) can download any worker's PDF for any fortnight.
-- **Fortnight start date:** a setting. Wade (24-11-2026): not decided yet, set it later.
+- **Fortnight start date:** a setting. Wade (24-11-2026): not decided yet, set it later. The Settings screen for it exists since 25-11-2026; Wade hasn't set it yet.
 
 ### Offline (required)
 - Clocking, breaks, jobs, leave requests and adjustment requests save on the phone immediately and sync automatically when signal returns.
@@ -239,7 +243,7 @@ How step 4 works (built 25-11-2026; details chosen by Claude, tell Wade if any n
 - `leave_requests` + `leave_days`: type, date range; one row per day with hours (default 8). Status, reviewer.
 - `timesheet_submissions`: person, fortnight, sent at.
 - `notifications`: in-app messages (e.g. "your adjustment was approved").
-- `settings`: fortnight start date, etc.
+- `settings` ✅ (fortnight start date; built with the dashboard redesign).
 
 ## Build order (from the brief)
 
